@@ -67,7 +67,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v3 · partage mobile</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v4 · pause & reprise</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
@@ -108,6 +108,8 @@
     <div class="lbl"><span class="spin"></span><b id="step">Analyse...</b>
       <span id="detail"></span></div>
     <div class="bar"><i id="pbar"></i></div>
+    <p class="note">📱 Reste sur la page pendant le montage (mets ta musique avant 😉).
+       Si tu quittes, ça se met en pause et reprend quand tu reviens.</p>
   </div>
 
   <div class="panel" id="results">
@@ -148,6 +150,21 @@ $('#sens').onclick = e => { if (!e.target.dataset.v) return;
   [...$('#sens').children].forEach(c => c.classList.remove('on'));
   e.target.classList.add('on'); };
 $('#vars').onclick = e => { if (e.target.dataset.v) e.target.classList.toggle('on'); };
+
+/* ---------- pause & reprise (iOS gèle les onglets en arrière-plan) ---------- */
+let busy = false, wakeLock = null;
+async function keepAwake(on){
+  try {
+    if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch(e){}
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && busy) {
+    keepAwake(true);                                  // le wake lock saute quand on quitte
+    if (vid.paused && !vid.ended) vid.play().catch(()=>{});  // reprend où ça s'était arrêté
+  }
+});
 
 function human(b){ return b>1e9?(b/1e9).toFixed(1)+' Go':b>1e6?(b/1e6).toFixed(0)+' Mo':(b/1e3).toFixed(0)+' Ko'; }
 
@@ -379,6 +396,7 @@ $('#go').onclick = async () => {
                  .map(c=>c.dataset.v);
   if (!wanted.length){ alert('Choisis au moins une variante'); return; }
   const target = +$('#target').value, sens = +$('#sens .on').dataset.v;
+  busy = true; keepAwake(true);
   $('#go').disabled = true; $('#results').style.display = 'none';
   $('#cards').innerHTML = '';
   try {
@@ -426,6 +444,7 @@ $('#go').onclick = async () => {
     progress('Erreur', '', 0);
     $('#step').classList.add('err'); $('#step').textContent = 'Erreur : ' + err.message;
   }
+  busy = false; keepAwake(false);
   $('#go').disabled = false;
 };
 

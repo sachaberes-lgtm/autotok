@@ -67,7 +67,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v2 · édition navigateur</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v3 · partage mobile</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
@@ -395,11 +395,24 @@ $('#go').onclick = async () => {
       const blob = await renderVariant(v, v.name, i, variants.length);
       const url = URL.createObjectURL(blob);
       $('#results').style.display = 'block';
-      $('#cards').insertAdjacentHTML('beforeend',
-        `<div class="card"><video src="${url}" controls muted loop></video>
+      const card = document.createElement('div'); card.className = 'card';
+      card.innerHTML =
+        `<video src="${url}" controls muted loop playsinline></video>
          <h3>${v.name} <span class="dur">${vDur(v).toFixed(0)}s</span></h3>
          <p>${v.hypothesis}</p><div class="cap">💬 ${v.caption}</div>
-         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a></div>`);
+         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a>`;
+      $('#cards').appendChild(card);
+      // iPhone/Android : feuille de partage -> Photos, TikTok, etc.
+      const shf = new File([blob], `${v.name}.${ext}`, { type: blob.type || 'video/mp4' });
+      if (navigator.canShare && navigator.canShare({ files: [shf] })) {
+        const sh = document.createElement('a');
+        sh.className = 'dl'; sh.href = '#';
+        sh.style.background = 'var(--ok)';
+        sh.textContent = '📲 Enregistrer sur le tel';
+        sh.onclick = ev => { ev.preventDefault();
+          navigator.share({ files: [shf] }).catch(() => {}); };
+        card.appendChild(sh);
+      }
     }
     let md = `# Hypothèses de hook — ${fileName}\n\n(${cutAmt}s de temps morts dégagés)\n\n`;
     for (const v of variants)

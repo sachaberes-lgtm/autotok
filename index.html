@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoTok — monte tes TikToks tout seul</title>
+<style>
+  :root { --bg:#0e0f13; --card:#181a21; --line:#2a2d38; --txt:#e8e9ee;
+          --mut:#8b8fa3; --acc:#e94f64; --acc2:#f7b32b; --ok:#3ecf8e; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); min-height:100vh;
+         font:15px/1.5 "Segoe UI", system-ui, sans-serif; padding:32px 16px; }
+  .wrap { max-width:680px; margin:0 auto; }
+  h1 { font-size:26px; letter-spacing:.5px; }
+  h1 span { color:var(--acc); }
+  .sub { color:var(--mut); margin:4px 0 24px; }
+  #drop { border:2px dashed var(--line); border-radius:16px; padding:48px 24px;
+          text-align:center; cursor:pointer; transition:.15s; background:var(--card); }
+  #drop.over { border-color:var(--acc); background:#1d1620; transform:scale(1.01); }
+  #drop .big { font-size:42px; }
+  #drop p { color:var(--mut); margin-top:8px; }
+  #drop b { color:var(--txt); }
+  #fileinfo { display:none; margin-top:14px; padding:10px 14px; background:#10231b;
+              border:1px solid #1e4433; border-radius:10px; color:var(--ok); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:16px;
+           padding:20px; margin-top:16px; }
+  .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:12px 0; }
+  .row label:first-child { width:120px; color:var(--mut); }
+  input[type=range] { flex:1; accent-color:var(--acc); }
+  .val { min-width:38px; text-align:right; font-weight:600; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:6px 14px;
+          cursor:pointer; color:var(--mut); user-select:none; transition:.15s; }
+  .chip.on { border-color:var(--acc); color:var(--txt); background:#241820; }
+  #go { width:100%; margin-top:18px; padding:14px; font-size:17px; font-weight:700;
+        border:0; border-radius:12px; cursor:pointer; color:#fff;
+        background:linear-gradient(90deg,var(--acc),#c2364e); }
+  #go:disabled { opacity:.35; cursor:not-allowed; }
+  #prog { display:none; }
+  #prog .lbl { color:var(--mut); font-size:13px; margin-bottom:8px; }
+  #prog .lbl b { color:var(--txt); }
+  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0%; background:var(--acc); transition:.3s; }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--acc);
+          border-top-color:transparent; border-radius:50%; margin-right:8px;
+          animation:r .8s linear infinite; vertical-align:-1px; }
+  @keyframes r { to { transform:rotate(360deg); } }
+  #results { display:none; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+           gap:14px; margin-top:14px; }
+  .card { background:var(--bg); border:1px solid var(--line); border-radius:12px;
+          padding:10px; }
+  .card video { width:100%; border-radius:8px; background:#000; aspect-ratio:9/16; }
+  .card h3 { font-size:14px; margin:8px 0 2px; }
+  .card .dur { color:var(--acc2); font-size:12px; }
+  .card p { color:var(--mut); font-size:12px; margin-top:6px; }
+  .card .cap { color:var(--txt); font-size:12px; margin-top:6px; font-style:italic; }
+  .dl { display:block; text-align:center; margin-top:10px; padding:9px;
+        border-radius:9px; background:var(--acc); color:#fff; font-weight:600;
+        text-decoration:none; font-size:13px; }
+  .note { color:var(--mut); font-size:12px; margin-top:14px; }
+  .err { color:#ff7b7b; }
+  #warn { display:none; margin-top:16px; padding:12px 16px; border-radius:10px;
+          background:#2b1d10; border:1px solid #5c3d1a; color:var(--acc2); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Auto<span>Tok</span> 🎨</h1>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v2 · édition navigateur</b>
+     Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
+
+  <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
+
+  <div id="drop">
+    <div class="big">📼</div>
+    <p><b>Glisse ton rush ici</b><br>ou clique pour choisir un fichier</p>
+    <input type="file" id="fi" accept="video/*" hidden>
+    <div id="fileinfo"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Durée cible</label>
+      <input type="range" id="target" min="10" max="30" value="22">
+      <span class="val" id="tval">22s</span>
+    </div>
+    <div class="row">
+      <label>Découpage</label>
+      <div class="chips" id="sens">
+        <span class="chip" data-v="0.15">Garde plus</span>
+        <span class="chip on" data-v="0.3">Normal</span>
+        <span class="chip" data-v="0.5">Coupe plus</span>
+      </div>
+    </div>
+    <div class="row">
+      <label>Variantes</label>
+      <div class="chips" id="vars">
+        <span class="chip on" data-v="A">A · Reveal d'abord</span>
+        <span class="chip on" data-v="B">B · Grosse action</span>
+        <span class="chip on" data-v="C">C · Timelapse</span>
+      </div>
+    </div>
+    <button id="go" disabled>Monter mes TikToks</button>
+  </div>
+
+  <div class="panel" id="prog">
+    <div class="lbl"><span class="spin"></span><b id="step">Analyse...</b>
+      <span id="detail"></span></div>
+    <div class="bar"><i id="pbar"></i></div>
+  </div>
+
+  <div class="panel" id="results">
+    <b>Tes TikToks</b> — chaque variante teste une hypothèse de hook.
+    Clique ▶ pour vérifier, puis télécharge et poste.
+    <div class="cards" id="cards"></div>
+    <a class="dl" id="dlhyp" style="background:none;border:1px solid var(--line)"
+       download="hypotheses.md">📄 Télécharger les hypothèses + tableau de stats</a>
+    <p class="note">Poste les variantes à ~24h d'intervalle, même créneau (18h-21h),
+       note les stats à 48h. C'est comme ça qu'on apprend ce qui marche.</p>
+  </div>
+
+  <video id="vid" muted playsinline style="display:none"></video>
+</div>
+<script>
+/* AutoTok — moteur 100% navigateur.
+   1) analyse (mouvement + nouveauté couleur) en lecture accélérée
+   2) découpe des temps morts  3) 3 variantes de hook
+   4) rendu 9:16 + speed ramps via canvas + MediaRecorder */
+"use strict";
+const $ = s => document.querySelector(s);
+const vid = $('#vid');
+let fileURL = null, fileName = '';
+
+/* ---------- UI de base ---------- */
+if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype) ||
+    typeof MediaRecorder === 'undefined') $('#warn').style.display = 'block';
+
+const drop = $('#drop'), fi = $('#fi');
+drop.onclick = () => fi.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); };
+fi.onchange = () => { if (fi.files[0]) loadFile(fi.files[0]); };
+$('#target').oninput = e => $('#tval').textContent = e.target.value + 's';
+$('#sens').onclick = e => { if (!e.target.dataset.v) return;
+  [...$('#sens').children].forEach(c => c.classList.remove('on'));
+  e.target.classList.add('on'); };
+$('#vars').onclick = e => { if (e.target.dataset.v) e.target.classList.toggle('on'); };
+
+function human(b){ return b>1e9?(b/1e9).toFixed(1)+' Go':b>1e6?(b/1e6).toFixed(0)+' Mo':(b/1e3).toFixed(0)+' Ko'; }
+
+function loadFile(f){
+  if (fileURL) URL.revokeObjectURL(fileURL);
+  fileURL = URL.createObjectURL(f); fileName = f.name;
+  vid.src = fileURL;
+  vid.onloadedmetadata = () => {
+    const info = $('#fileinfo'); info.style.display = 'block';
+    info.textContent = `✅ ${f.name} (${human(f.size)}, ${Math.round(vid.duration)}s) — prêt à monter`;
+    $('#go').disabled = false;
+  };
+  vid.onerror = () => { const info = $('#fileinfo'); info.style.display='block';
+    info.textContent = '❌ Format non lisible par le navigateur (essaie un .mp4)'; };
+}
+
+function progress(step, detail, frac){
+  $('#prog').style.display = 'block';
+  $('#step').textContent = step; $('#detail').textContent = detail || '';
+  $('#pbar').style.width = Math.round(100*frac) + '%';
+}
+
+/* ---------- 1. ANALYSE ---------- */
+async function analyze(){
+  const W = 160, H = Math.max(2, Math.round(vid.videoHeight*W/vid.videoWidth));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently:true });
+  const samples = []; let prevG = null, prevH = null, lastT = -1;
+  vid.currentTime = 0; vid.playbackRate = 16;
+  await vid.play();
+  return new Promise(res => {
+    let done = false;
+    const finish = () => { if (!done){ done = true; vid.pause(); res(samples); } };
+    vid.onended = finish;
+    const step = (now, meta) => {
+      const t = meta.mediaTime;
+      if (t - lastT >= 0.4){
+        lastT = t;
+        ctx.drawImage(vid, 0, 0, W, H);
+        const d = ctx.getImageData(0, 0, W, H).data, n = W*H;
+        const gray = new Float32Array(n), hist = new Float32Array(64);
+        for (let i=0,p=0;i<n;i++,p+=4){
+          const r=d[p],g=d[p+1],b=d[p+2];
+          gray[i]=.299*r+.587*g+.114*b;
+          hist[((r>>6)<<4)|((g>>6)<<2)|(b>>6)]++;
+        }
+        for (let i=0;i<64;i++) hist[i]/=n;
+        let motion=0, cx=.5;
+        if (prevG){
+          let cnt=0,sx=0;
+          for (let i=0;i<n;i++) if (Math.abs(gray[i]-prevG[i])>10){cnt++;sx+=i%W;}
+          motion=100*cnt/n; if (cnt>0) cx=sx/cnt/W;
+        }
+        let nov=0;
+        if (prevH){ for (let i=0;i<64;i++) nov+=Math.abs(hist[i]-prevH[i]); nov/=2; }
+        prevG=gray; prevH=hist;
+        samples.push({t, motion, novelty:nov, cx});
+        progress('Analyse du rush...', `${Math.round(t)}s / ${Math.round(vid.duration)}s`,
+                 t/vid.duration);
+      }
+      if (!done && !vid.ended) vid.requestVideoFrameCallback(step); else finish();
+    };
+    vid.requestVideoFrameCallback(step);
+  });
+}
+
+/* ---------- 2. SEGMENTATION ---------- */
+const smooth = (a, w=5) => a.map((_,i) => {
+  let s=0,c=0; for (let j=Math.max(0,i-2); j<=Math.min(a.length-1,i+2); j++){s+=a[j];c++;}
+  return s/c; });
+const pct = (a,p) => { const s=[...a].sort((x,y)=>x-y);
+  return s[Math.min(s.length-1, Math.floor(p/100*s.length))] || 0; };
+
+function findSegments(samples, sens){
+  if (!samples.length) return [];
+  const m = smooth(samples.map(s=>s.motion)), nv = smooth(samples.map(s=>s.novelty));
+  const norm = a => { const hi = Math.max(pct(a,95), 1e-6);
+    return a.map(x => Math.min(x/hi, 1.5)); };
+  const nm = norm(m), nn = norm(nv);
+  const interest = nm.map((x,i) => .7*x + .3*nn[i]);
+  const thr = Math.max(.05, sens*pct(interest,90));
+  const raw = []; let st = null;
+  interest.forEach((x,i) => {
+    if (x>thr && st===null) st=i;
+    else if (x<=thr && st!==null){ raw.push([st,i]); st=null; } });
+  if (st!==null) raw.push([st, samples.length]);
+  const merged = [];
+  for (const [s,e] of raw){
+    if (merged.length && samples[s].t - samples[merged[merged.length-1][1]-1].t < 2)
+      merged[merged.length-1][1] = e;
+    else merged.push([s,e]);
+  }
+  const out = [];
+  for (const [s,e] of merged){
+    const t0 = samples[s].t, t1 = samples[Math.min(e,samples.length-1)].t;
+    if (t1-t0 < 1) continue;
+    const ch = interest.slice(s,e);
+    const cxs = samples.slice(s,e).map(x=>x.cx).sort((a,b)=>a-b);
+    out.push({ start:t0, end:t1, dur:t1-t0,
+      score: ch.reduce((a,b)=>a+b,0)/ch.length, peak: Math.max(...ch),
+      cx: cxs[Math.floor(cxs.length/2)] });
+  }
+  return out;
+}
+
+/* ---------- 3. VARIANTES DE HOOK ---------- */
+const outDur = c => (c.end-c.start)/c.speed;
+const vDur = v => v.clips.reduce((a,c)=>a+outDur(c),0);
+
+function pickBody(segs, budget){
+  const ranked = [...segs].sort((a,b)=>b.score-a.score);
+  const chosen = []; let tot = 0;
+  for (const s of ranked){ if (tot>=budget) break; chosen.push(s); tot+=s.dur; }
+  return chosen.sort((a,b)=>a.start-b.start);
+}
+
+function fit(clips, target, hookCount=1, maxSpeed=4){
+  for (let it=0; it<20; it++){
+    const dur = clips.reduce((a,c)=>a+outDur(c),0);
+    if (dur <= target*1.05) break;
+    const body = clips.slice(hookCount);
+    if (!body.length) break;
+    const bodyDur = body.reduce((a,c)=>a+outDur(c),0) || 1;
+    const factor = bodyDur/Math.max(bodyDur-(dur-target), bodyDur*.3);
+    let capped = true;
+    for (const c of body){ const ns = Math.min(c.speed*factor, maxSpeed);
+      if (ns > c.speed) capped = false; c.speed = ns; }
+    if (capped){
+      if (body.length>1)
+        clips.splice(clips.indexOf(body.reduce((a,b)=>(a.end-a.start)<(b.end-b.start)?a:b)),1);
+      else break;
+    }
+  }
+  return clips;
+}
+
+function buildVariants(segs, target){
+  const out = [];
+  const last = segs[segs.length-1];
+  const peak = segs.reduce((a,b)=>b.peak>a.peak?b:a);
+  const rl = Math.min(2, last.dur);
+  out.push({ name:'A_reveal_first',
+    hypothesis:"Le résultat fini dans la 1ère seconde crée une boucle de curiosité ('comment il a fait ça ?') → meilleure rétention sur les 3 premières secondes.",
+    caption:'Attends de voir comment c\'est fait 👀 #spraypaint',
+    clips: fit([{start:last.end-rl,end:last.end,speed:1,cx:last.cx},
+      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.6,cx:s.cx}))], target) });
+  const hl = Math.min(2.5, peak.dur), mid = (peak.start+peak.end)/2;
+  const h0 = Math.max(peak.start, mid-hl/2);
+  out.push({ name:'B_peak_action',
+    hypothesis:"Ouvrir sur le geste le plus dynamique capte l'attention par le mouvement pur → moins de swipe-away immédiat.",
+    caption:'Le geste le plus satisfaisant du spray paint 🎨',
+    clips: fit([{start:h0,end:Math.min(h0+hl,peak.end),speed:1,cx:peak.cx},
+      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.6,cx:s.cx}))], target) });
+  const act = segs.reduce((a,s)=>a+s.dur,0);
+  const bs = Math.min(12, Math.max(2, act/Math.max(target-2,5)));
+  const cl = segs.map(s=>({start:s.start,end:s.end,speed:bs,cx:s.cx}));
+  const lc = cl[cl.length-1], cut = Math.max(lc.start, lc.end-1.5);
+  if (cut > lc.start){ lc.end = cut;
+    cl.push({start:cut,end:last.end,speed:1,cx:last.cx}); }
+  out.push({ name:'C_timelapse',
+    hypothesis:"Le process complet en accéléré est satisfying de bout en bout : la promesse d'un résultat maintient le viewer jusqu'à la fin (watch time %).",
+    caption:'Toute la toile en 20 secondes ⏱️ #satisfying',
+    clips: fit(cl, target, 0, 16) });
+  return out;
+}
+
+/* ---------- 4. RENDU ---------- */
+const seekTo = t => new Promise(r => { vid.onseeked = r; vid.currentTime = t; });
+const playUntil = end => new Promise(r => {
+  const chk = (now, meta) => {
+    if (meta.mediaTime >= end - .03 || vid.ended){ vid.pause(); r(); }
+    else vid.requestVideoFrameCallback(chk); };
+  vid.requestVideoFrameCallback(chk); });
+
+function cropRect(cx){
+  const vw = vid.videoWidth, vh = vid.videoHeight;
+  let cw = Math.floor(vh*9/16);
+  if (cw <= vw){
+    const sx = Math.max(0, Math.min(cx*vw - cw/2, vw-cw));
+    return [sx, 0, cw, vh];
+  }
+  const ch = Math.floor(vw*16/9);
+  return [0, Math.max(0,(vh-ch)/2), vw, ch];
+}
+
+function pickMime(){
+  const c = ['video/mp4;codecs=avc1.640028','video/mp4',
+             'video/webm;codecs=vp9','video/webm'];
+  for (const m of c) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+async function renderVariant(variant, label, idx, total){
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080; canvas.height = 1920;
+  const ctx = canvas.getContext('2d');
+  const stream = canvas.captureStream(30);
+  const mime = pickMime();
+  const rec = new MediaRecorder(stream, { mimeType:mime, videoBitsPerSecond:8e6 });
+  const chunks = []; rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r => rec.onstop = r);
+  rec.start(250);
+  let rect = [0,0,vid.videoWidth,vid.videoHeight], run = true;
+  const loop = () => { if (!run) return;
+    ctx.drawImage(vid, ...rect, 0, 0, 1080, 1920);
+    requestAnimationFrame(loop); };
+  loop();
+  const total_d = vDur(variant); let done_d = 0;
+  for (const c of variant.clips){
+    rec.pause();
+    await seekTo(c.start);
+    rect = cropRect(c.cx);
+    vid.playbackRate = Math.min(16, c.speed);
+    rec.resume();
+    await vid.play();
+    await playUntil(c.end);
+    done_d += outDur(c);
+    progress(`Montage ${label} (${idx}/${total})...`,
+             `${Math.round(done_d)}s / ${Math.round(total_d)}s`,
+             (idx-1)/total + done_d/total_d/total);
+  }
+  run = false; rec.stop(); await stopped;
+  return new Blob(chunks, { type: mime.split(';')[0] || 'video/webm' });
+}
+
+/* ---------- 5. ORCHESTRATION ---------- */
+$('#go').onclick = async () => {
+  const wanted = [...$('#vars').children].filter(c=>c.classList.contains('on'))
+                 .map(c=>c.dataset.v);
+  if (!wanted.length){ alert('Choisis au moins une variante'); return; }
+  const target = +$('#target').value, sens = +$('#sens .on').dataset.v;
+  $('#go').disabled = true; $('#results').style.display = 'none';
+  $('#cards').innerHTML = '';
+  try {
+    const samples = await analyze();
+    const segs = findSegments(samples, sens);
+    if (!segs.length) throw new Error("Aucune action détectée — essaie 'Garde plus'.");
+    const cutAmt = Math.round(vid.duration - segs.reduce((a,s)=>a+s.dur,0));
+    let variants = buildVariants(segs, target)
+                   .filter(v => wanted.includes(v.name[0]));
+    const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
+    let i = 0;
+    for (const v of variants){
+      i++;
+      const blob = await renderVariant(v, v.name, i, variants.length);
+      const url = URL.createObjectURL(blob);
+      $('#results').style.display = 'block';
+      $('#cards').insertAdjacentHTML('beforeend',
+        `<div class="card"><video src="${url}" controls muted loop></video>
+         <h3>${v.name} <span class="dur">${vDur(v).toFixed(0)}s</span></h3>
+         <p>${v.hypothesis}</p><div class="cap">💬 ${v.caption}</div>
+         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a></div>`);
+    }
+    let md = `# Hypothèses de hook — ${fileName}\n\n(${cutAmt}s de temps morts dégagés)\n\n`;
+    for (const v of variants)
+      md += `## ${v.name}\n\n**Hypothèse :** ${v.hypothesis}\n\n**Caption :** ${v.caption}\n\n`;
+    md += '\n## Stats à noter à 48h\n\ndate,variante,heure_post,vues,watch_time_pct,likes,commentaires,partages,follows\n';
+    for (const v of variants) md += `,${v.name},,,,,,,\n`;
+    $('#dlhyp').href = URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
+    progress('Terminé !', `${cutAmt}s de temps morts dégagés · ${variants.length} TikToks prêts`, 1);
+    document.querySelector('#prog .spin').style.display = 'none';
+  } catch (err){
+    progress('Erreur', '', 0);
+    $('#step').classList.add('err'); $('#step').textContent = 'Erreur : ' + err.message;
+  }
+  $('#go').disabled = false;
+};
+
+</script>
+</body>
+</html>

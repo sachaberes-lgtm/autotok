@@ -67,7 +67,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v4 · pause & reprise</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v5 · anti-blocage</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
@@ -131,6 +131,7 @@
    4) rendu 9:16 + speed ramps via canvas + MediaRecorder */
 "use strict";
 const $ = s => document.querySelector(s);
+const MOB = /iPhone|iPad|Android/i.test(navigator.userAgent);
 const vid = $('#vid');
 let fileURL = null, fileName = '';
 
@@ -165,6 +166,11 @@ document.addEventListener('visibilitychange', () => {
     if (vid.paused && !vid.ended) vid.play().catch(()=>{});  // reprend où ça s'était arrêté
   }
 });
+// chien de garde : iOS pause parfois la vidéo tout seul (musique, throttling...)
+setInterval(() => {
+  if (busy && !document.hidden && vid.paused && !vid.seeking && !vid.ended)
+    vid.play().catch(()=>{});
+}, 2000);
 
 function human(b){ return b>1e9?(b/1e9).toFixed(1)+' Go':b>1e6?(b/1e6).toFixed(0)+' Mo':(b/1e3).toFixed(0)+' Ko'; }
 
@@ -334,8 +340,19 @@ function buildVariants(segs, target){
 /* ---------- 4. RENDU ---------- */
 const seekTo = t => new Promise(r => { vid.onseeked = r; vid.currentTime = t; });
 const playUntil = end => new Promise(r => {
+  let done = false, lastT = -1, lastMove = Date.now();
+  const finish = () => { if (!done){ done = true; clearInterval(iv); vid.pause(); r(); } };
+  const iv = setInterval(() => {
+    if (done) return;
+    if (vid.currentTime >= end - .05 || vid.ended) return finish();
+    if (document.hidden) { lastMove = Date.now(); return; }
+    if (vid.currentTime !== lastT){ lastT = vid.currentTime; lastMove = Date.now(); }
+    else if (Date.now() - lastMove > 2500){        // figé -> on relance
+      vid.play().catch(()=>{}); lastMove = Date.now(); }
+  }, 500);
   const chk = (now, meta) => {
-    if (meta.mediaTime >= end - .03 || vid.ended){ vid.pause(); r(); }
+    if (done) return;
+    if (meta.mediaTime >= end - .03 || vid.ended) finish();
     else vid.requestVideoFrameCallback(chk); };
   vid.requestVideoFrameCallback(chk); });
 
@@ -359,17 +376,17 @@ function pickMime(){
 
 async function renderVariant(variant, label, idx, total){
   const canvas = document.createElement('canvas');
-  canvas.width = 1080; canvas.height = 1920;
+  canvas.width = MOB ? 720 : 1080; canvas.height = MOB ? 1280 : 1920;
   const ctx = canvas.getContext('2d');
   const stream = canvas.captureStream(30);
   const mime = pickMime();
-  const rec = new MediaRecorder(stream, { mimeType:mime, videoBitsPerSecond:8e6 });
+  const rec = new MediaRecorder(stream, { mimeType:mime, videoBitsPerSecond: MOB ? 5e6 : 8e6 });
   const chunks = []; rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   const stopped = new Promise(r => rec.onstop = r);
   rec.start(250);
   let rect = [0,0,vid.videoWidth,vid.videoHeight], run = true;
   const loop = () => { if (!run) return;
-    ctx.drawImage(vid, ...rect, 0, 0, 1080, 1920);
+    ctx.drawImage(vid, ...rect, 0, 0, canvas.width, canvas.height);
     requestAnimationFrame(loop); };
   loop();
   const total_d = vDur(variant); let done_d = 0;

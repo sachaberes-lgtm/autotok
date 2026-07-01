@@ -67,7 +67,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v5 · anti-blocage</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v6 · import iPhone</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
@@ -75,8 +75,13 @@
   <div id="drop">
     <div class="big">📼</div>
     <p><b>Glisse ton rush ici</b><br>ou clique pour choisir un fichier</p>
-    <input type="file" id="fi" accept="video/*" hidden>
+    <input type="file" id="fi" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
     <div id="fileinfo"></div>
+    <p class="note" id="iostip" style="display:none">💡 iPhone : si un camembert de chargement
+       mouline longtemps après le choix de la vidéo, annule et passe par
+       <b>Choisir un fichier → app Fichiers</b> (enregistre d'abord le rush dans Fichiers
+       via Photos → Partager → Enregistrer dans Fichiers). Et filme en
+       Réglages → Appareil photo → Formats → <b>Le plus compatible</b>, en 1080p.</p>
   </div>
 
   <div class="panel">
@@ -139,6 +144,7 @@ let fileURL = null, fileName = '';
 if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype) ||
     typeof MediaRecorder === 'undefined') $('#warn').style.display = 'block';
 
+if (MOB) $('#iostip').style.display = 'block';
 const drop = $('#drop'), fi = $('#fi');
 drop.onclick = () => fi.click();
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };

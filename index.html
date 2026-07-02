@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v9 · agenda multi-plateformes</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v10 · lecture .mov</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -217,6 +217,7 @@ if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype) ||
 
 if (MOB) $('#iostip').style.display = 'block';
 const drop = $('#drop'), fi = $('#fi');
+if (!MOB) fi.setAttribute('accept', 'video/*,.mp4,.mov,.m4v');
 drop.onclick = () => fi.click();
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
@@ -260,8 +261,17 @@ function loadFile(f){
     info.textContent = `✅ ${f.name} (${human(f.size)}, ${Math.round(vid.duration)}s) — prêt à monter`;
     $('#go').disabled = false;
   };
-  vid.onerror = () => { const info = $('#fileinfo'); info.style.display='block';
-    info.textContent = '❌ Format non lisible par le navigateur (essaie un .mp4)'; };
+  vid.onerror = () => {
+    const info = $('#fileinfo'); info.style.display = 'block';
+    const hevcOK = vid.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
+    info.innerHTML = '❌ <b>Vidéo illisible par ce navigateur.</b> Un .mov iPhone est souvent ' +
+      'encodé en HEVC (H.265)' + (hevcOK ? '' : ', que ce navigateur ne décode pas') + '.<br>' +
+      '✅ <b>La solution durable :</b> sur iPhone, Réglages → Appareil photo → Formats → ' +
+      '« <b>Le plus compatible</b> » — tes prochains rushs (.mov en H.264) passeront partout.<br>' +
+      '🔁 <b>Pour CE rush :</b> ouvre-le avec <b>Clipchamp</b> (déjà sur Windows 11) et exporte en MP4, ' +
+      'ou réessaie dans <b>Microsoft Edge</b> (il lit le HEVC sur la plupart des PC).';
+    info.style.color = '#ff9f9f'; };
+  vid.onloadedmetadata_ok = true;
 }
 
 function progress(step, detail, frac){

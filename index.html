@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v12 · son + diagnostic</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v13 · montage réel + QC IA</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -90,7 +90,7 @@
     <b>Comment ça marche</b>
     <p class="note" style="margin-top:8px">
     1️⃣ <b>Glisse ton rush</b> (la session entière, brute) → l’app vire les temps morts et fabrique
-    4 TikToks avec 4 hooks différents.<br>
+    3 propositions de montage vraiment différentes (plans réels, pas d’accéléré chelou).<br>
     2️⃣ <b>Poste-les selon l’agenda</b> de l’onglet Labo (un par créneau, caption fournie,
     bouton direct vers TikTok/YouTube/Insta).<br>
     3️⃣ <b>Note les stats à 48h</b> → le détecteur de hook apprend ce qui marche sur TON audience
@@ -119,24 +119,9 @@
       <input type="range" id="target" min="10" max="30" value="22">
       <span class="val" id="tval">22s</span>
     </div>
-    <div class="row">
-      <label>Découpage</label>
-      <div class="chips" id="sens">
-        <span class="chip" data-v="0.15">Garde plus</span>
-        <span class="chip on" data-v="0.3">Normal</span>
-        <span class="chip" data-v="0.5">Coupe plus</span>
-      </div>
-    </div>
-    <div class="row">
-      <label>Variantes</label>
-      <div class="chips" id="vars">
-        <span class="chip on" data-v="A">A · Reveal d'abord</span>
-        <span class="chip on" data-v="B">B · Grosse action</span>
-        <span class="chip on" data-v="C">C · Timelapse</span>
-        <span class="chip on" data-v="D">D · Hook auto 🎯</span>
-      </div>
-    </div>
-    <button id="go" disabled>Monter mes TikToks</button>
+    <p class="note">Tu reçois <b>3 propositions vraiment différentes</b>. Clique
+      « 🎯 Affiner » sur celle qui te plaît → 3 versions plus précises de ce style.</p>
+    <button id="go" disabled>Créer mes 3 propositions</button>
   </div>
 
   <div class="panel" id="prog">
@@ -181,6 +166,11 @@
           <span class="chip" data-d="3">Mer</span><span class="chip" data-d="4">Jeu</span>
           <span class="chip" data-d="5">Ven</span><span class="chip" data-d="6">Sam</span>
           <span class="chip" data-d="0">Dim</span></div></div>
+      <div class="row"><label>Contrôle IA</label>
+        <input type="password" id="apikey" placeholder="clé API Anthropic (sk-ant-...), optionnel"
+          style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:6px 10px"></div>
+      <p class="note">Avec une clé (console.anthropic.com), une IA regarde chaque montage fini
+        et écrit un compte rendu qualité sous la vidéo (~0,02 € par montage).</p>
       <div class="row"><label>Heure</label>
         <input type="time" id="phour" value="18:30"
           style="background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:6px 10px"></div>
@@ -222,6 +212,7 @@
 const $ = s => document.querySelector(s);
 const MOB = /iPhone|iPad|Android/i.test(navigator.userAgent);
 const vid = $('#vid');
+try { vid.preservesPitch = true; } catch(e){}
 let fileURL = null, fileName = '';
 
 /* ---------- UI de base ---------- */
@@ -238,10 +229,7 @@ drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over');
   if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); };
 fi.onchange = () => { if (fi.files[0]) loadFile(fi.files[0]); };
 $('#target').oninput = e => $('#tval').textContent = e.target.value + 's';
-$('#sens').onclick = e => { if (!e.target.dataset.v) return;
-  [...$('#sens').children].forEach(c => c.classList.remove('on'));
-  e.target.classList.add('on'); };
-$('#vars').onclick = e => { if (e.target.dataset.v) e.target.classList.toggle('on'); };
+
 
 /* ---------- pause & reprise (iOS gèle les onglets en arrière-plan) ---------- */
 let busy = false, wakeLock = null;
@@ -529,7 +517,7 @@ async function renderVariant(variant, label, idx, total){
     await seekTo(c.start);
     rect = cropRect(c.cx);
     vid.playbackRate = Math.min(16, c.speed);
-    vid.muted = c.speed > 2.5;   // le son ne suit que les passages <= 2.5x
+    vid.muted = !!variant.mute || c.speed > 2.5;
     rec.resume();
     await vid.play();
     await playUntil(c.end);
@@ -711,6 +699,128 @@ function renderCutList(){
     : '<p class="note">Note tes montages 👍/👎 sous chaque vidéo générée — c’est le carburant des corrections.</p>';
 }
 
+
+/* ---------- MONTAGE DYNAMIQUE : plans réels 1x + sujet principal ---------- */
+function segScenes(samples, segs){
+  const hists = segs.map(s => {
+    const sub = samples.filter(x => x.t >= s.start && x.t <= s.end && x.hist);
+    const m = new Array(64).fill(0);
+    for (const x of sub) for (let j = 0; j < 64; j++) m[j] += x.hist[j] / sub.length;
+    return m;
+  });
+  const dist = (a, b) => a.reduce((s, v, j) => s + Math.abs(v - b[j]), 0) / 2;
+  const cl = new Array(segs.length).fill(-1);
+  let nc = 0;
+  for (let i = 0; i < segs.length; i++){
+    if (cl[i] >= 0) continue;
+    cl[i] = nc;
+    for (let j = i + 1; j < segs.length; j++)
+      if (cl[j] < 0 && dist(hists[i], hists[j]) < 0.28) cl[j] = nc;
+    nc++;
+  }
+  const durByC = {};
+  segs.forEach((s, i) => durByC[cl[i]] = (durByC[cl[i]] || 0) + s.dur);
+  const main = +Object.entries(durByC).sort((a, b) => b[1] - a[1])[0][0];
+  segs.forEach((s, i) => { s.scene = cl[i]; s.main = cl[i] === main; });
+  return nc;
+}
+
+function makeChunks(segs, samples){
+  // plans de ~3s à vitesse réelle, un par fenêtre de 5s, centrés sur le pic local
+  const chunks = [];
+  segs.forEach((s, si) => {
+    const sub = samples.filter(x => x.t >= s.start && x.t <= s.end);
+    let t = s.start;
+    while (t < s.end){
+      const win = sub.filter(x => x.t >= t && x.t < t + 5);
+      if (win.length){
+        const best = win.reduce((a, b) => b.motion > a.motion ? b : a);
+        const c0 = Math.max(s.start, best.t - 1.4), c1 = Math.min(s.end, best.t + 1.7);
+        if (c1 - c0 > 1.2) chunks.push({ start: +c0.toFixed(2), end: +c1.toFixed(2),
+          speed: 1, cx: best.cx, score: best.motion, seg: si,
+          scene: s.scene, main: s.main });
+      }
+      t += 5;
+    }
+  });
+  return chunks;
+}
+
+function assemble(chunks, budget, skip){
+  // 1 plan max hors sujet principal ; répartition sur tous les segments du sujet
+  const off = chunks.filter(c => !c.main).sort((a, b) => b.score - a.score).slice(0, 1);
+  const groups = {};
+  chunks.filter(c => c.main).forEach(c => (groups[c.seg] = groups[c.seg] || []).push(c));
+  for (const k in groups) groups[k].sort((a, b) => b.score - a.score);
+  const keys = Object.keys(groups);
+  const pick = [...off];
+  let dur = pick.reduce((a, c) => a + c.end - c.start, 0);
+  let round = skip || 0;
+  while (dur < budget){
+    let added = false;
+    for (const k of keys){
+      const c = groups[k][round];
+      if (c && dur < budget){ pick.push(c); dur += c.end - c.start; added = true; }
+    }
+    if (!added) break;
+    round++;
+  }
+  return pick.sort((a, b) => a.start - b.start);
+}
+
+function mkVariant(name, hyp, cap, clips, extra){
+  return Object.assign({ name, hypothesis: hyp, caption: cap, clips }, extra || {});
+}
+
+function buildStage1(){
+  const { samples, segs, chunks, target, skip } = window._ana;
+  const out = [];
+  const mains = segs.filter(s => s.main);
+  const hd = detectHook(samples, mains.length ? mains : segs, target);
+  const hookClip = hd ? { ...hd.clips[0] } : null;
+  const last = mains[mains.length - 1] || segs[segs.length - 1];
+  const b1 = assemble(chunks, target - (hookClip ? 2.2 : 0), skip);
+  out.push(mkVariant('B_bestof',
+    'Plans réels sans accéléré, cuts serrés sur les meilleurs moments du sujet principal, hook détecté en ouverture. Son conservé.',
+    'Le process en vrai ⚡ #spraypaint',
+    hookClip ? [hookClip, ...b1.filter(c => Math.abs(c.start - hookClip.start) > 2.2)] : b1,
+    { feat: hd ? hd.feat : null }));
+  const rl = Math.min(2.2, last.dur);
+  out.push(mkVariant('A_reveal',
+    'Le résultat fini dans la première seconde, puis le process en plans réels. Son conservé.',
+    'Attends de voir le début 👀 #spraypaint',
+    [{ start: +(last.end - rl).toFixed(2), end: last.end, speed: 1, cx: last.cx },
+     ...assemble(chunks, target - rl, skip)]));
+  const act = segs.reduce((a, s) => a + s.dur, 0);
+  const bs = Math.min(12, Math.max(2, act / Math.max(target - 2, 5)));
+  const cl = segs.map(s => ({ start: s.start, end: s.end, speed: bs, cx: s.cx }));
+  const lc = cl[cl.length - 1], cut = Math.max(lc.start, lc.end - 1.5);
+  if (cut > lc.start){ lc.end = cut;
+    cl.push({ start: cut, end: segs[segs.length - 1].end, speed: 1, cx: lc.cx }); }
+  out.push(mkVariant('C_timelapse',
+    'Tout le process en accéléré assumé (le seul mode rapide), reveal final en vitesse réelle. Muet : ajoute un son tendance.',
+    'Toute la toile en ' + Math.round(target) + 's ⏱ #satisfying',
+    fit(cl, target, 0, 16), { mute: true }));
+  return out;
+}
+
+function buildStage2(f){
+  const t0 = window._ana.target, out = [];
+  const plans = f === 'C'
+    ? [['1_court', Math.max(10, t0 - 7), 0], ['2_normal', t0, 0], ['3_long', Math.min(30, t0 + 7), 0]]
+    : [['1_court', Math.max(10, t0 - 6), 0], ['2_long', Math.min(30, t0 + 6), 0], ['3_autres_plans', t0, 1]];
+  const idx = { B: 0, A: 1, C: 2 }[f] ?? 0;
+  for (const [suf, t2, sk] of plans){
+    window._ana.target = t2; window._ana.skip = sk;
+    const v = buildStage1()[idx];
+    v.name = f + suf;
+    if (sk) v.hypothesis += ' (autres plans du même sujet)';
+    out.push(v);
+  }
+  window._ana.target = t0; window._ana.skip = 0;
+  return out;
+}
+
 /* ---------- LABO : base locale, plan de posts, apprentissage ---------- */
 const DBK = 'autotok_db_v1';
 const dbGet = () => { try { return JSON.parse(localStorage.getItem(DBK)) || { posts: [] }; }
@@ -836,7 +946,7 @@ function renderLabo(){
     : ag.length ? 'Pas encore assez de données pour trancher (≥3 posts par variante). Continue d\'alterner A, B et C.'
     : 'Poste tes 3 premières variantes, note les stats à 48h, et les enseignements apparaîtront ici.';
   renderDetector(); renderCutList();
-  [...$('#vars').children].forEach(ch => {
+  if ($('#vars')) [...$('#vars').children].forEach(ch => {
     ch.textContent = ch.textContent.replace('🏆 ', '');
     if (win && ch.dataset.v === win) ch.textContent = '🏆 ' + ch.textContent;
   });
@@ -888,6 +998,8 @@ $('#pdays').onclick = e => { if (e.target.dataset.d === undefined) return;
   cfg.days = cfg.days.includes(d) ? cfg.days.filter(x => x !== d) : [...cfg.days, d].sort();
   if (!cfg.days.length) cfg.days = [0,1,2,3,4,5,6];
   cfgSet(cfg); renderCfg(); };
+$('#apikey').value = localStorage.getItem('autotok_apikey') || '';
+$('#apikey').onchange = e => localStorage.setItem('autotok_apikey', e.target.value.trim());
 $('#phour').onchange = e => { const cfg = cfgGet(); cfg.hour = e.target.value || '18:30';
   cfgSet(cfg); };
 $('#expics').onclick = () => {
@@ -936,66 +1048,115 @@ $('#expcsv').onclick = () => {
 renderLabo();
 
 /* ---------- 5. ORCHESTRATION ---------- */
+async function aiReview(blob, v, card){
+  const key = localStorage.getItem('autotok_apikey');
+  if (!key) return;
+  try {
+    const url = URL.createObjectURL(blob), vv = document.createElement('video');
+    vv.src = url; vv.muted = true;
+    await new Promise((r, j) => { vv.onloadedmetadata = r; vv.onerror = j; });
+    const cv = document.createElement('canvas'); cv.width = 270; cv.height = 480;
+    const c2 = cv.getContext('2d'); const imgs = [];
+    const D = vv.duration || vDur(v);
+    for (let i = 0; i < 6; i++){
+      vv.currentTime = Math.min(D - .1, (i + .5) / 6 * D);
+      await new Promise(r => vv.onseeked = r);
+      c2.drawImage(vv, 0, 0, 270, 480);
+      imgs.push(cv.toDataURL('image/jpeg', .55).split(',')[1]);
+    }
+    URL.revokeObjectURL(url);
+    const content = [{ type: 'text', text:
+      `Tu es contrôleur qualité de montages TikTok générés automatiquement (spray paint art). ` +
+      `Voici 6 images dans l'ordre du montage "${v.name}" (${vDur(v).toFixed(0)}s, plans: ` +
+      v.clips.map(c => Math.round(c.start) + '-' + Math.round(c.end) + 's x' + (+c.speed).toFixed(1)).join(', ') +
+      `). En 4 lignes max et sans complaisance : 1) le sujet est-il cohérent d'image en image ? ` +
+      `2) des plans visiblement ratés/vides ? 3) le hook (1re image) donne-t-il envie ? ` +
+      `4) note /10 + LA correction prioritaire.` },
+      ...imgs.map(d => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d } }))];
+    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 350,
+        messages: [{ role: 'user', content }] }) });
+    const j = await r.json();
+    const txt = j.content ? j.content[0].text : ('erreur API : ' + (j.error ? j.error.message : r.status));
+    card.insertAdjacentHTML('beforeend',
+      `<p class="note" style="border-top:1px solid var(--line);padding-top:8px">🤖 <b>Contrôle qualité IA</b><br>${txt.replace(/\n/g, '<br>')}</p>`);
+    const d = dbGet();
+    for (const p of d.posts.filter(p => p.variant === v.name && p.video === fileName)) p.aiReview = txt;
+    dbSet(d);
+  } catch (e){
+    card.insertAdjacentHTML('beforeend', `<p class="note">🤖 contrôle IA indisponible (${e.message})</p>`);
+  }
+}
+
+async function renderAll(variants, stage1){
+  const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
+  window._lastVars = window._lastVars || {};
+  let i = 0;
+  for (const v of variants){
+    i++;
+    const blob = await renderVariant(v, v.name, i, variants.length);
+    const url = URL.createObjectURL(blob);
+    $('#results').style.display = 'block';
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = `<video src="${url}" controls playsinline></video>
+      <h3>${v.name} <span class="dur">${vDur(v).toFixed(0)}s</span></h3>
+      <p>${v.hypothesis}</p><div class="cap">💬 ${v.caption}</div>
+      <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a>`;
+    $('#cards').appendChild(card);
+    if (stage1) card.insertAdjacentHTML('beforeend',
+      `<button class="mini" onclick="refine('${v.name[0]}')">🎯 Affiner ce style</button>`);
+    card.insertAdjacentHTML('beforeend',
+      `<button class="mini" onclick="schedule('${v.name}')">🗓 Programmer</button>
+       <button class="mini ghost" onclick="rateCut('${v.name}',1)">👍</button>
+       <button class="mini ghost" onclick="rateCut('${v.name}',0)">👎</button>`);
+    const shf = new File([blob], `${v.name}.${ext}`, { type: blob.type || 'video/mp4' });
+    if (navigator.canShare && navigator.canShare({ files: [shf] })){
+      const sh = document.createElement('a'); sh.className = 'dl'; sh.href = '#';
+      sh.style.background = 'var(--ok)'; sh.textContent = '📲 Enregistrer sur le tel';
+      sh.onclick = ev => { ev.preventDefault(); navigator.share({ files: [shf] }).catch(() => {}); };
+      card.appendChild(sh);
+    }
+    window._lastVars[v.name] = v;
+    aiReview(blob, v, card);
+  }
+}
+window.schedule = name => {
+  const v = (window._lastVars || {})[name];
+  if (v){ addToPlan(fileName, [v]); alert('Programmé ✓ — planning dans l’onglet Labo'); }
+};
+window.refine = async f => {
+  $('#go').disabled = true; busy = true; keepAwake(true);
+  $('#cards').innerHTML = '';
+  try { await renderAll(buildStage2(f), false);
+    progress('3 versions affinées prêtes ✓', '', 1);
+  } catch (e){ progress('Erreur', '', 0); $('#step').textContent = 'Erreur : ' + e.message; }
+  busy = false; keepAwake(false); $('#go').disabled = false;
+};
+
 $('#go').onclick = async () => {
-  const wanted = [...$('#vars').children].filter(c=>c.classList.contains('on'))
-                 .map(c=>c.dataset.v);
-  if (!wanted.length){ alert('Choisis au moins une variante'); return; }
-  const target = +$('#target').value, sens = +$('#sens .on').dataset.v;
+  const target = +$('#target').value;
   busy = true; keepAwake(true);
   $('#go').disabled = true; $('#results').style.display = 'none';
   $('#cards').innerHTML = '';
   try {
     const samples = await analyze();
-    const segs = findSegments(samples, sens);
-    if (!segs.length) throw new Error("Aucune action détectée — essaie 'Garde plus'.");
-    const cutAmt = Math.round(vid.duration - segs.reduce((a,s)=>a+s.dur,0));
-    let variants = buildVariants(segs, target)
-                   .filter(v => wanted.includes(v.name[0]));
-    const win = winnerLetter();
-    if ((win === 'A' || win === 'B') && wanted.includes(win))
-      variants = variants.flatMap(v => v.name[0] === win ? makeDuel(v) : [v]);
-    if (wanted.includes('D')){
-      const hd = detectHook(samples, segs, target);
-      if (hd) variants.push(hd);
-    }
-    const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
-    let i = 0;
-    for (const v of variants){
-      i++;
-      const blob = await renderVariant(v, v.name, i, variants.length);
-      const url = URL.createObjectURL(blob);
-      $('#results').style.display = 'block';
-      const card = document.createElement('div'); card.className = 'card';
-      card.innerHTML =
-        `<video src="${url}" controls muted loop playsinline></video>
-         <h3>${v.name} <span class="dur">${vDur(v).toFixed(0)}s</span></h3>
-         <p>${v.hypothesis}</p><div class="cap">💬 ${v.caption}</div>
-         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a>
-         <button class="mini ghost" onclick="rateCut('${v.name}',1)">👍 bon montage</button>
-         <button class="mini ghost" onclick="rateCut('${v.name}',0)">👎 à côté</button>`;
-      $('#cards').appendChild(card);
-      // iPhone/Android : feuille de partage -> Photos, TikTok, etc.
-      const shf = new File([blob], `${v.name}.${ext}`, { type: blob.type || 'video/mp4' });
-      if (navigator.canShare && navigator.canShare({ files: [shf] })) {
-        const sh = document.createElement('a');
-        sh.className = 'dl'; sh.href = '#';
-        sh.style.background = 'var(--ok)';
-        sh.textContent = '📲 Enregistrer sur le tel';
-        sh.onclick = ev => { ev.preventDefault();
-          navigator.share({ files: [shf] }).catch(() => {}); };
-        card.appendChild(sh);
-      }
-    }
+    const segs = findSegments(samples, 0.3);
+    if (!segs.length) throw new Error('Aucune action détectée dans la vidéo.');
+    const nScenes = segScenes(samples, segs);
+    const chunks = makeChunks(segs, samples);
+    window._ana = { samples, segs, chunks, target, skip: 0 };
+    const cutAmt = Math.round((vid.duration || 0) - segs.reduce((a, s) => a + s.dur, 0));
+    const variants = buildStage1();
+    await renderAll(variants, true);
     $('#diag').style.display = 'block';
-    try { drawDiag(samples, segs, variants); } catch(e){}
-    addToPlan(fileName, variants);
-    let md = `# Hypothèses de hook — ${fileName}\n\n(${cutAmt}s de temps morts dégagés)\n\n`;
-    for (const v of variants)
-      md += `## ${v.name}\n\n**Hypothèse :** ${v.hypothesis}\n\n**Caption :** ${v.caption}\n\n`;
-    md += '\n## Stats à noter à 48h\n\ndate,variante,heure_post,vues,watch_time_pct,likes,commentaires,partages,follows\n';
-    for (const v of variants) md += `,${v.name},,,,,,,\n`;
-    $('#dlhyp').href = URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
-    progress('Terminé !', `${cutAmt}s de temps morts dégagés · ${variants.length} TikToks prêts`, 1);
+    try { drawDiag(samples, segs, variants); } catch (e){}
+    let md = `# Hypothèses — ${fileName}\n\n`;
+    for (const v of variants) md += `## ${v.name}\n\n${v.hypothesis}\n\n`;
+    $('#dlhyp').href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
+    progress('Terminé !', cutAmt + 's de temps morts dégagés · ' + nScenes +
+      ' scène(s) détectée(s) — choisis, affine, programme.', 1);
     document.querySelector('#prog .spin').style.display = 'none';
   } catch (err){
     progress('Erreur', '', 0);

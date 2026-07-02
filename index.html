@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v15 · cuts 1-2s vérifiés IA</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v17 · dynamisme boosté</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -286,11 +286,21 @@ async function analyze(){
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently:true });
   const samples = []; let prevG = null, prevH = null, lastT = -1;
+  let anl = null;
+  try {
+    if (!window._actx){ window._actx = new AudioContext();
+      window._asrc = _actx.createMediaElementSource(vid);
+      window._adest = _actx.createMediaStreamDestination();
+      _asrc.connect(_adest); }
+    if (!window._anl){ window._anl = _actx.createAnalyser();
+      _anl.fftSize = 512; _asrc.connect(_anl); }
+    anl = window._anl; _actx.resume(); vid.muted = false;
+  } catch(e){}
   vid.currentTime = 0; vid.playbackRate = 16;
   await vid.play();
   return new Promise(res => {
     let done = false;
-    const finish = () => { if (!done){ done = true; vid.pause(); res(samples); } };
+    const finish = () => { if (!done){ done = true; vid.pause(); vid.muted = true; res(samples); } };
     vid.onended = finish;
     const step = (now, meta) => {
       const t = meta.mediaTime;
@@ -318,7 +328,12 @@ async function analyze(){
         let nov=0;
         if (prevH){ for (let i=0;i<64;i++) nov+=Math.abs(hist[i]-prevH[i]); nov/=2; }
         prevG=gray; prevH=hist;
-        samples.push({t, motion, novelty:nov, cx,
+        let aud = 0;
+        if (anl){ const ab = new Uint8Array(anl.fftSize);
+          anl.getByteTimeDomainData(ab);
+          let ss = 0; for (let q = 0; q < ab.length; q++){ const vv = (ab[q]-128)/128; ss += vv*vv; }
+          aud = Math.sqrt(ss / ab.length); }
+        samples.push({t, aud, motion, novelty:nov, cx,
           sat: satSum/n, con: Math.sqrt(gv/n)/64, hist: Array.from(hist)});
         progress('Analyse du rush...', `${Math.round(t)}s / ${Math.round(vid.duration)}s`,
                  t/vid.duration);
@@ -508,20 +523,28 @@ async function renderVariant(variant, label, idx, total){
   rec.start(250);
   let rect = [0,0,vid.videoWidth,vid.videoHeight], cur = null, run = true;
   const loop = () => { if (!run) return;
-    let [sx, sy, sw, sh] = rect, z = 1, dx = 0;
-    if (cur && cur.fx){
-      const p = Math.min(1, Math.max(0,
-        (vid.currentTime - cur.start) / Math.max(.1, cur.end - cur.start)));
-      if (cur.fx === 'zin') z = 1 + .16 * p;
-      else if (cur.fx === 'zout') z = 1.16 - .16 * p;
-      else if (cur.fx === 'punch') z = 1.22;
-      else if (cur.fx === 'panl'){ z = 1.15; dx = p - .5; }
-      else if (cur.fx === 'panr'){ z = 1.15; dx = .5 - p; }
+    let [sx, sy, sw, sh] = rect, z = 1, dx = 0, dy = 0, flash = 0;
+    if (cur){
+      const el = vid.currentTime - cur.start;
+      const p = Math.min(1, Math.max(0, el / Math.max(.1, cur.end - cur.start)));
+      if (cur.fx === 'snap') z = p < .28 ? 1.32 : 1.14 + .06 * p;   // punch qui claque puis retombe
+      else if (cur.fx === 'zin') z = 1.06 + .26 * p;
+      else if (cur.fx === 'zout') z = 1.32 - .26 * p;
+      else if (cur.fx === 'punch') z = 1.26;
+      else if (cur.fx === 'panl'){ z = 1.2; dx = p - .5; }
+      else if (cur.fx === 'panr'){ z = 1.2; dx = .5 - p; }
+      if (cur.hit && el < .28){                                      // shake sur impact sonore
+        const k = (1 - el / .28) * .018;
+        dx += (Math.random() - .5) * k * 30; dy = (Math.random() - .5) * k * sh;
+      }
+      if (el >= 0 && el < .07) flash = .75 * (1 - el / .07);         // flash blanc au cut
     }
     const sw2 = sw / z, sh2 = sh / z;
     const sx2 = Math.max(0, Math.min(sx + (sw - sw2) / 2 + dx * (sw - sw2), sx + sw - sw2));
-    const sy2 = sy + (sh - sh2) / 2;
+    const sy2 = Math.max(0, Math.min(sy + (sh - sh2) / 2 + dy, sy + sh - sh2));
     ctx.drawImage(vid, sx2, sy2, sw2, sh2, 0, 0, canvas.width, canvas.height);
+    if (flash > 0){ ctx.fillStyle = 'rgba(255,255,255,' + flash.toFixed(2) + ')';
+      ctx.fillRect(0, 0, canvas.width, canvas.height); }
     requestAnimationFrame(loop); };
   loop();
   const total_d = vDur(variant); let done_d = 0;
@@ -533,7 +556,12 @@ async function renderVariant(variant, label, idx, total){
     vid.muted = !!variant.mute || c.speed > 2.5;
     rec.resume();
     await vid.play();
+    let rampT = null;
+    if (c.speed === 1 && !c.noRamp && (c.end - c.start) > 1.3)
+      rampT = setTimeout(() => { if (!vid.paused) vid.playbackRate = 1.35; },
+        (c.end - c.start) * 580);
     await playUntil(c.end);
+    if (rampT) clearTimeout(rampT);
     done_d += outDur(c);
     progress(`Montage ${label} (${idx}/${total})...`,
              `${Math.round(done_d)}s / ${Math.round(total_d)}s`,
@@ -738,19 +766,38 @@ function segScenes(samples, segs){
   return nc;
 }
 
+function computeWork(samples){
+  const H = (a, b) => (a && b) ? a.reduce((s, v, j) => s + Math.abs(v - b[j]), 0) / 2 : 0;
+  const n = samples.length;
+  for (let i = 0; i < n; i++){
+    // la sculpture a-t-elle DURABLEMENT changé autour de cet instant ?
+    samples[i].impact = H(samples[Math.max(0, i-7)].hist, samples[Math.min(n-1, i+7)].hist);
+    const a0 = Math.max(0, i-5);
+    const base = samples.slice(a0, Math.max(a0+1, i)).reduce((x, y) => x + (y.aud||0), 0) / Math.max(1, i-a0);
+    samples[i].athit = Math.max(0, (samples[i].aud||0) - base);   // transitoire sonore
+  }
+  const nz = arr => { const s = arr.slice().sort((a, b) => a - b);
+    const hi = Math.max(1e-6, s[Math.floor(s.length * .95)]);
+    return x => Math.min(1.5, x / hi); };
+  const nI = nz(samples.map(s => s.impact)), nM = nz(samples.map(s => s.motion)),
+        nA = nz(samples.map(s => s.athit));
+  for (const s of samples)
+    s.work = nI(s.impact) * (0.6 + 0.4 * nM(s.motion)) * (1 + 1.5 * nA(s.athit));
+}
+
 function planGrid(pool, samples, budget, mode, skip){
   // grille stricte : un plan toutes les 1-2s, chaque plan visuellement NOUVEAU
-  const pat = [1.4, 1.9, 1.3, 2.1, 1.6, 1.8];
+  const pat = [1.2, 0.7, 0.7, 1.8, 0.9, 0.6, 1.4, 2.0];   // rafales + respirations
   const durs = []; let d = 0, i = 0;
   while (d < budget - .6){ const x = Math.min(pat[i % pat.length], budget - d);
-    if (x < .9) break; durs.push(x); d += x; i++; }
+    if (x < .5) break; durs.push(x); d += x; i++; }
   const total = pool.reduce((a, s) => a + s.dur, 0);
   const inMain = t => pool.some(s => t >= s.start && t <= s.end);
   const hd2 = (a, b) => (a && b) ? a.reduce((s, v, j) => s + Math.abs(v - b[j]), 0) / 2 : .5;
   const anchors = []; let prevHist = null;
   if (mode === 'action'){
     const cand = samples.filter(x => inMain(x.t))
-      .sort((a, b) => b.motion - a.motion).slice(0, durs.length * 5);
+      .sort((a, b) => (b.work||0) - (a.work||0)).slice(0, durs.length * 5);
     for (const c of cand){
       if (anchors.length >= durs.length) break;
       if (anchors.every(a => Math.abs(a.t - c.t) > 3)) anchors.push(c);
@@ -764,8 +811,8 @@ function planGrid(pool, samples, budget, mode, skip){
       const win = samples.filter(x => x.t > t - 2.5 && x.t < t + 2.5 && inMain(x.t));
       // score = mouvement x (1 + 2 x différence visuelle avec le plan précédent)
       const best = win.length ? win.reduce((a, b) =>
-        (b.motion * (1 + 2 * hd2(prevHist, b.hist))) >
-        (a.motion * (1 + 2 * hd2(prevHist, a.hist))) ? b : a) : { t, cx: .5, hist: null };
+        ((b.work||0) * (1 + 2 * hd2(prevHist, b.hist))) >
+        ((a.work||0) * (1 + 2 * hd2(prevHist, a.hist))) ? b : a) : { t, cx: .5, hist: null };
       prevHist = best.hist || prevHist;
       anchors.push(best);
     }
@@ -775,7 +822,8 @@ function planGrid(pool, samples, budget, mode, skip){
     const len = durs[k] || 1.6;
     let c0 = Math.max(0, a.t - len / 2);
     if (c0 < prevEnd + .1) c0 = prevEnd + .1;
-    plans.push({ start: +c0.toFixed(2), end: +(c0 + len).toFixed(2), speed: 1, cx: a.cx });
+    plans.push({ start: +c0.toFixed(2), end: +(c0 + len).toFixed(2), speed: 1,
+      cx: a.cx, hit: (a.athit || 0) > 0.03 });
     prevEnd = c0 + len;
   });
   return plans;
@@ -785,7 +833,7 @@ function mkVariant(name, hyp, cap, clips, extra){
   return Object.assign({ name, hypothesis: hyp, caption: cap, clips }, extra || {});
 }
 
-const FXCYCLE = ['zin', 'panr', 'zout', 'panl'];
+const FXCYCLE = ['snap', 'zin', 'panr', 'zout', 'panl'];
 function buildStage1(){
   const { samples, segs, target, skip } = window._ana;
   const mains = segs.filter(s => s.main), pool = mains.length ? mains : segs;
@@ -799,9 +847,9 @@ function buildStage1(){
   };
   { // P1 : hook + process + reveal
     const hook = hd ? { ...hd.clips[0], end: +(hd.clips[0].start + 2.4).toFixed(2),
-      speed: 1, fx: 'punch' } : null;
+      speed: 1, fx: 'punch', noRamp: true } : null;
     const rev = { start: +(Math.max(last.start, last.end - 2.6)).toFixed(2), end: last.end,
-      speed: 1, cx: last.cx, fx: 'zin' };
+      speed: 1, cx: last.cx, fx: 'zin', noRamp: true };
     const mid = grid(target - (hook ? 2.4 : 0) - 2.6, 'even')
       .filter(c => (!hook || Math.abs(c.start - hook.start) > 2.5) && c.end < rev.start);
     out.push(mkVariant('B_hook_process',
@@ -811,7 +859,7 @@ function buildStage1(){
   }
   { // P2 : reveal d'abord
     const rev = { start: +(Math.max(last.start, last.end - 2.4)).toFixed(2), end: last.end,
-      speed: 1, cx: last.cx, fx: 'punch' };
+      speed: 1, cx: last.cx, fx: 'punch', noRamp: true };
     const mid = grid(target - 2.4, 'even').filter(c => c.end < rev.start);
     out.push(mkVariant('A_reveal',
       'Le résultat fini dans la 1re seconde (boucle de curiosité), puis le process en cuts 1-2s, image nouvelle à chaque plan. Son conservé.',
@@ -1089,9 +1137,10 @@ async function aiReview(blob, v, card){
       `Tu es contrôleur qualité de montages TikTok générés automatiquement (spray paint art). ` +
       `Voici 6 images dans l'ordre du montage "${v.name}" (${vDur(v).toFixed(0)}s, plans: ` +
       v.clips.map(c => Math.round(c.start) + '-' + Math.round(c.end) + 's x' + (+c.speed).toFixed(1)).join(', ') +
-      `). En 4 lignes max et sans complaisance : 1) le sujet est-il cohérent d'image en image ? ` +
-      `2) des plans visiblement ratés/vides ? 3) le hook (1re image) donne-t-il envie ? ` +
-      `4) note /10 + LA correction prioritaire.` },
+      `). Barème SÉVÈRE : un montage n\u2019est bon que si chaque image montre la matière en train de ` +
+      `changer (peinture qui couvre, métal tordu, découpe). Des gestes sans transformation visible = ennuyeux = note <= 4. ` +
+      `En 4 lignes max : 1) combien d\u2019images montrent une vraie transformation ? 2) le hook donne-t-il envie ` +
+      `(résultat visible ou action forte) ? 3) note /10 avec ce barème 4) LA correction prioritaire.` },
       ...imgs.map(d => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d } }))];
     const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key,
@@ -1126,11 +1175,16 @@ async function aiVerifyPlans(v){
   if (!key || !window._ana) return;
   try {
     progress('Vérification IA des plans — ' + v.name, 'une capture par cut', .05);
-    const imgs = await framesAt(v.clips.map(c => (c.start + c.end) / 2));
+    const times = [];
+    v.clips.forEach(c => { times.push(c.start + .15, Math.max(c.start + .3, c.end - .15)); });
+    const imgs = await framesAt(times);
     const content = [{ type: 'text', text:
-      'Voici ' + imgs.length + ' images, une par plan (dans l\u2019ordre) d\u2019un montage TikTok de spray paint art. ' +
-      'Règle : chaque plan doit apporter une image NOUVELLE (action, geste ou cadrage différent du plan précédent) et intéressante. ' +
-      'Réponds UNIQUEMENT en JSON strict : {"drop":[numéros des plans quasi identiques au précédent ou vides, à partir de 1]}' },
+      'Montage TikTok de sculpture/spray paint. Voici ' + v.clips.length + ' plans, chacun représenté par ' +
+      'DEUX images : son début puis sa fin (donc images 1-2 = plan 1, images 3-4 = plan 2, etc.). ' +
+      'RÈGLE STRICTE : un plan n\u2019est bon que si la matière ou l\u2019\u0153uvre change VISIBLEMENT entre son début et sa fin ' +
+      '(peinture qui couvre, métal qui plie, découpe, perçage). Les gestes sans transformation (main qui passe, ' +
+      'déplacement, réglage) sont à virer. Réponds UNIQUEMENT en JSON strict : ' +
+      '{"drop":[numéros des plans SANS transformation visible, à partir de 1]}' },
       ...imgs.map(d => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d } }))];
     const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key,
@@ -1151,7 +1205,7 @@ async function aiVerifyPlans(v){
       const len = c.end - c.start;
       const cand = samples.filter(x => inMain(x.t) &&
         v.clips.every(k => Math.abs(x.t - (k.start + k.end) / 2) > 3))
-        .sort((a, b) => b.motion - a.motion)[0];
+        .sort((a, b) => (b.work||0) - (a.work||0))[0];
       if (cand){ c.start = +Math.max(0, cand.t - len / 2).toFixed(2);
         c.end = +(c.start + len).toFixed(2); c.cx = cand.cx; swapped++; }
     }
@@ -1215,6 +1269,7 @@ $('#go').onclick = async () => {
     const samples = await analyze();
     const segs = findSegments(samples, 0.3);
     if (!segs.length) throw new Error('Aucune action détectée dans la vidéo.');
+    computeWork(samples);
     const nScenes = segScenes(samples, segs);
     window._ana = { samples, segs, target, skip: 0 };
     const cutAmt = Math.round((vid.duration || 0) - segs.reduce((a, s) => a + s.dur, 0));

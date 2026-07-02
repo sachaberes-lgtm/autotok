@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v11 · conversion auto</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v12 · son + diagnostic</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -157,6 +157,15 @@
        note les stats à 48h. C'est comme ça qu'on apprend ce qui marche.</p>
   </div>
 
+  <div class="panel" id="diag" style="display:none">
+    <b>🔬 Diagnostic du montage</b> — ce que l'algo a vu
+    <canvas id="diagCanvas" style="width:100%;height:110px;margin-top:10px;border-radius:8px"></canvas>
+    <p class="note">Zones vertes = passages gardés · courbe grise = activité détectée ·
+    barres = ce que chaque variante utilise (A rouge, B jaune, C bleu, D vert).
+    Si un moment important n'est pas couvert, note 👎 la variante et dis-le en commentaire :
+    ça nourrit directement les corrections.</p>
+  </div>
+
   </div>
 
   <div id="pageLabo" style="display:none">
@@ -185,6 +194,9 @@
 
     <div class="panel"><b>🏁 Duels en cours</b> — quelle variante gagne, vidéo par vidéo
       <div id="duels"></div></div>
+
+    <div class="panel"><b>🔬 Retours sur les montages</b> — tes 👍/👎 pour améliorer l'algo
+      <div id="cutlist"></div></div>
     <div class="panel"><b>📊 Stats à noter</b> — 48h après chaque post
       <div id="pending"></div></div>
     <div class="panel"><b>🎯 Détecteur de hook</b> — ce qu'il regarde pour choisir l'ouverture
@@ -361,8 +373,10 @@ function findSegments(samples, sens){
     if (t1-t0 < 1) continue;
     const ch = interest.slice(s,e);
     const cxs = samples.slice(s,e).map(x=>x.cx).sort((a,b)=>a-b);
+    let pi = 0; ch.forEach((v,i)=>{ if (v > ch[pi]) pi = i; });
     out.push({ start:t0, end:t1, dur:t1-t0,
       score: ch.reduce((a,b)=>a+b,0)/ch.length, peak: Math.max(...ch),
+      peakT: samples[Math.min(s+pi, samples.length-1)].t,
       cx: cxs[Math.floor(cxs.length/2)] });
   }
   return out;
@@ -373,13 +387,31 @@ const outDur = c => (c.end-c.start)/c.speed;
 const vDur = v => v.clips.reduce((a,c)=>a+outDur(c),0);
 
 function pickBody(segs, budget){
-  const ranked = [...segs].sort((a,b)=>b.score-a.score);
-  const chosen = []; let tot = 0;
-  for (const s of ranked){ if (tot>=budget) break; chosen.push(s); tot+=s.dur; }
-  return chosen.sort((a,b)=>a.start-b.start);
+  // un segment ne peut pas manger plus de 40% du montage : recadrage sur son pic
+  const dur = segs[segs.length-1].end;
+  const cap = Math.max(6, budget * 0.4);
+  const pool = segs.map(s => {
+    if (s.dur <= cap) return { ...s };
+    const c = Math.min(Math.max(s.peakT ?? (s.start+s.end)/2, s.start + cap/2), s.end - cap/2);
+    return { ...s, start: +(c - cap/2).toFixed(2), end: +(c + cap/2).toFixed(2), dur: cap };
+  });
+  // diversité : le meilleur moment de chaque tiers de la vidéo d'abord
+  const third = s => Math.min(2, Math.floor(((s.start + s.end) / 2) / (dur / 3 + 1e-9)));
+  const chosen = [];
+  for (let t = 0; t < 3; t++){
+    const best = pool.filter(s => third(s) === t)
+      .sort((a, b) => b.score - a.score)[0];
+    if (best && !chosen.includes(best)) chosen.push(best);
+  }
+  let tot = chosen.reduce((a, s) => a + s.dur, 0);
+  for (const s of [...pool].sort((a, b) => b.score - a.score)){
+    if (tot >= budget) break;
+    if (!chosen.includes(s)){ chosen.push(s); tot += s.dur; }
+  }
+  return chosen.sort((a, b) => a.start - b.start);
 }
 
-function fit(clips, target, hookCount=1, maxSpeed=4){
+function fit(clips, target, hookCount=1, maxSpeed=2.6){
   for (let it=0; it<20; it++){
     const dur = clips.reduce((a,c)=>a+outDur(c),0);
     if (dur <= target*1.05) break;
@@ -408,14 +440,14 @@ function buildVariants(segs, target){
     hypothesis:"Le résultat fini dans la 1ère seconde crée une boucle de curiosité ('comment il a fait ça ?') → meilleure rétention sur les 3 premières secondes.",
     caption:'Attends de voir comment c\'est fait 👀 #spraypaint',
     clips: fit([{start:last.end-rl,end:last.end,speed:1,cx:last.cx},
-      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.6,cx:s.cx}))], target) });
+      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.25,cx:s.cx}))], target) });
   const hl = Math.min(2.5, peak.dur), mid = (peak.start+peak.end)/2;
   const h0 = Math.max(peak.start, mid-hl/2);
   out.push({ name:'B_peak_action',
     hypothesis:"Ouvrir sur le geste le plus dynamique capte l'attention par le mouvement pur → moins de swipe-away immédiat.",
     caption:'Le geste le plus satisfaisant du spray paint 🎨',
     clips: fit([{start:h0,end:Math.min(h0+hl,peak.end),speed:1,cx:peak.cx},
-      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.6,cx:s.cx}))], target) });
+      ...pickBody(segs,target*2).map(s=>({start:s.start,end:s.end,speed:1.25,cx:s.cx}))], target) });
   const act = segs.reduce((a,s)=>a+s.dur,0);
   const bs = Math.min(12, Math.max(2, act/Math.max(target-2,5)));
   const cl = segs.map(s=>({start:s.start,end:s.end,speed:bs,cx:s.cx}));
@@ -460,8 +492,9 @@ function cropRect(cx){
 }
 
 function pickMime(){
-  const c = ['video/mp4;codecs=avc1.640028','video/mp4',
-             'video/webm;codecs=vp9','video/webm'];
+  const c = ['video/mp4;codecs="avc1.640028,mp4a.40.2"',
+             'video/mp4;codecs=avc1.640028','video/mp4',
+             'video/webm;codecs=vp9,opus','video/webm;codecs=vp9','video/webm'];
   for (const m of c) if (MediaRecorder.isTypeSupported(m)) return m;
   return '';
 }
@@ -471,6 +504,15 @@ async function renderVariant(variant, label, idx, total){
   canvas.width = MOB ? 720 : 1080; canvas.height = MOB ? 1280 : 1920;
   const ctx = canvas.getContext('2d');
   const stream = canvas.captureStream(30);
+  try {
+    if (!window._actx){ window._actx = new AudioContext();
+      window._asrc = _actx.createMediaElementSource(vid);
+      window._adest = _actx.createMediaStreamDestination();
+      _asrc.connect(_adest); }
+    _actx.resume();
+    const at = _adest.stream.getAudioTracks()[0];
+    if (at) stream.addTrack(at);
+  } catch(e){}
   const mime = pickMime();
   const rec = new MediaRecorder(stream, { mimeType:mime, videoBitsPerSecond: MOB ? 5e6 : 8e6 });
   const chunks = []; rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
@@ -487,6 +529,7 @@ async function renderVariant(variant, label, idx, total){
     await seekTo(c.start);
     rect = cropRect(c.cx);
     vid.playbackRate = Math.min(16, c.speed);
+    vid.muted = c.speed > 2.5;   // le son ne suit que les passages <= 2.5x
     rec.resume();
     await vid.play();
     await playUntil(c.end);
@@ -496,6 +539,7 @@ async function renderVariant(variant, label, idx, total){
              (idx-1)/total + done_d/total_d/total);
   }
   run = false; rec.stop(); await stopped;
+  vid.muted = true;
   return new Blob(chunks, { type: mime.split(';')[0] || 'video/webm' });
 }
 
@@ -606,7 +650,7 @@ function detectHook(samples, segs, target){
   const t = samples[bi].t, h0 = Math.max(0, t-1);
   const feat = {}; for (const k in F) feat[k] = +F[k][bi].toFixed(4);
   const clips = fit([{ start:h0, end:h0+2.2, speed:1, cx:samples[bi].cx },
-    ...pickBody(segs, target*2).map(g=>({start:g.start,end:g.end,speed:1.6,cx:g.cx}))], target);
+    ...pickBody(segs, target*2).map(g=>({start:g.start,end:g.end,speed:1.25,cx:g.cx}))], target);
   return { name:'D_hook_auto', feat,
     hypothesis:`Hook détecté à ${Math.round(t)}s par le détecteur multi-signaux `+
       `(mouvement, surprise, couleurs, curiosity gap...). Il apprend de tes stats à chaque post noté.`,
@@ -626,6 +670,45 @@ function learnHookWeights(){
   }
   if (norm > 0) for (const k in w) w[k] /= norm;
   localStorage.setItem(HWK, JSON.stringify({ n: posts.length, w }));
+}
+
+function drawDiag(samples, segs, variants){
+  const cv = $('#diagCanvas');
+  const W = cv.width = Math.max(600, cv.clientWidth * 2), H = cv.height = 220;
+  const ctx = cv.getContext('2d');
+  const dur = samples[samples.length-1].t || 1;
+  const X = t => t / dur * W;
+  ctx.fillStyle = '#0e0f13'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(62,207,142,.15)';
+  for (const s of segs) ctx.fillRect(X(s.start), 0, X(s.end) - X(s.start), H);
+  const m = smooth(samples.map(s => s.motion)); const mx = Math.max(...m, 1e-6);
+  ctx.strokeStyle = '#8b8fa3'; ctx.lineWidth = 2; ctx.beginPath();
+  samples.forEach((s, i) => { const x = X(s.t), y = H - 6 - (m[i] / mx) * (H * .45);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+  const colors = { A:'#e94f64', B:'#f7b32b', C:'#4fa3e9', D:'#3ecf8e' };
+  variants.forEach((v, vi) => {
+    ctx.fillStyle = colors[v.name[0]] || '#fff';
+    for (const c of v.clips)
+      ctx.fillRect(X(c.start), 12 + vi * 20, Math.max(3, X(c.end) - X(c.start)), 12);
+  });
+}
+window.rateCut = (name, ok) => {
+  const d = dbGet();
+  const ps = d.posts.filter(p => p.variant === name && p.video === fileName);
+  const note = ok ? '' :
+    (prompt('Qu’est-ce qui ne va pas ? (mauvais passage, trop rapide, hook raté...)') || '');
+  for (const p of ps){ p.cut = ok; if (note) p.cutNote = note; }
+  dbSet(d);
+};
+function renderCutList(){
+  const rated = dbGet().posts.filter(p => p.cut !== undefined);
+  const seen = new Set();
+  $('#cutlist').innerHTML = rated.length ? rated.filter(p => {
+    const k = p.video + p.variant; if (seen.has(k)) return false; seen.add(k); return true;
+  }).map(p => `<div class="post">${p.cut ? '👍' : '👎'} <b>${p.variant}</b> · ${p.video}
+    ${p.cutNote ? '<br><span class="note">« ' + p.cutNote + ' »</span>' : ''}</div>`).join('')
+    : '<p class="note">Note tes montages 👍/👎 sous chaque vidéo générée — c’est le carburant des corrections.</p>';
 }
 
 /* ---------- LABO : base locale, plan de posts, apprentissage ---------- */
@@ -752,7 +835,7 @@ function renderLabo(){
     ? `Ton hook ${win} domine nettement. Au prochain montage, il sera automatiquement décliné en 2 versions (hook court vs long) pour affiner — c'est le mode duel.`
     : ag.length ? 'Pas encore assez de données pour trancher (≥3 posts par variante). Continue d\'alterner A, B et C.'
     : 'Poste tes 3 premières variantes, note les stats à 48h, et les enseignements apparaîtront ici.';
-  renderDetector();
+  renderDetector(); renderCutList();
   [...$('#vars').children].forEach(ch => {
     ch.textContent = ch.textContent.replace('🏆 ', '');
     if (win && ch.dataset.v === win) ch.textContent = '🏆 ' + ch.textContent;
@@ -843,10 +926,11 @@ $('#tabM').onclick = () => { $('#tabM').classList.add('on'); $('#tabL').classLis
 $('#tabL').onclick = () => { $('#tabL').classList.add('on'); $('#tabM').classList.remove('on');
   $('#pageMontage').style.display = 'none'; $('#pageLabo').style.display = 'block'; renderLabo(); };
 $('#expcsv').onclick = () => {
-  let csv = 'video,variante,plateforme,hypothese,prevu,poste,vues,watch_pct,likes,commentaires,partages,follows\n';
+  let csv = 'video,variante,plateforme,hypothese,prevu,poste,vues,watch_pct,likes,commentaires,partages,follows,montage_ok,montage_note\n';
   for (const p of dbGet().posts){ const s = p.stats || {};
     csv += [p.video, p.variant, p.plat || 'tiktok', '"' + p.hyp.replace(/"/g, "'") + '"', p.plan, p.posted || '',
-      s.v || '', s.w || '', s.l || '', s.c || '', s.p || '', s.f || ''].join(',') + '\n'; }
+      s.v || '', s.w || '', s.l || '', s.c || '', s.p || '', s.f || '',
+      p.cut === undefined ? '' : (p.cut ? 'oui' : 'non'), '"' + (p.cutNote || '').replace(/"/g, "'") + '"'].join(',') + '\n'; }
   $('#expcsv').href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
 };
 renderLabo();
@@ -886,7 +970,9 @@ $('#go').onclick = async () => {
         `<video src="${url}" controls muted loop playsinline></video>
          <h3>${v.name} <span class="dur">${vDur(v).toFixed(0)}s</span></h3>
          <p>${v.hypothesis}</p><div class="cap">💬 ${v.caption}</div>
-         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a>`;
+         <a class="dl" href="${url}" download="${v.name}.${ext}">⬇ Télécharger</a>
+         <button class="mini ghost" onclick="rateCut('${v.name}',1)">👍 bon montage</button>
+         <button class="mini ghost" onclick="rateCut('${v.name}',0)">👎 à côté</button>`;
       $('#cards').appendChild(card);
       // iPhone/Android : feuille de partage -> Photos, TikTok, etc.
       const shf = new File([blob], `${v.name}.${ext}`, { type: blob.type || 'video/mp4' });
@@ -900,6 +986,8 @@ $('#go').onclick = async () => {
         card.appendChild(sh);
       }
     }
+    $('#diag').style.display = 'block';
+    try { drawDiag(samples, segs, variants); } catch(e){}
     addToPlan(fileName, variants);
     let md = `# Hypothèses de hook — ${fileName}\n\n(${cutAmt}s de temps morts dégagés)\n\n`;
     for (const v of variants)

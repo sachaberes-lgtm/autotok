@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v14 · cuts 2-3s + effets</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v15 · cuts 1-2s vérifiés IA</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -739,35 +739,40 @@ function segScenes(samples, segs){
 }
 
 function planGrid(pool, samples, budget, mode, skip){
-  // grille stricte : un plan toutes les 2-3s jusqu'à la durée cible
-  const pat = [2.2, 3, 2.4, 2.8, 2];
+  // grille stricte : un plan toutes les 1-2s, chaque plan visuellement NOUVEAU
+  const pat = [1.4, 1.9, 1.3, 2.1, 1.6, 1.8];
   const durs = []; let d = 0, i = 0;
-  while (d < budget - .8){ const x = Math.min(pat[i % pat.length], budget - d);
-    if (x < 1.2) break; durs.push(x); d += x; i++; }
+  while (d < budget - .6){ const x = Math.min(pat[i % pat.length], budget - d);
+    if (x < .9) break; durs.push(x); d += x; i++; }
   const total = pool.reduce((a, s) => a + s.dur, 0);
   const inMain = t => pool.some(s => t >= s.start && t <= s.end);
-  let anchors;
+  const hd2 = (a, b) => (a && b) ? a.reduce((s, v, j) => s + Math.abs(v - b[j]), 0) / 2 : .5;
+  const anchors = []; let prevHist = null;
   if (mode === 'action'){
     const cand = samples.filter(x => inMain(x.t))
-      .sort((a, b) => b.motion - a.motion).slice(0, durs.length * 4);
-    anchors = [];
+      .sort((a, b) => b.motion - a.motion).slice(0, durs.length * 5);
     for (const c of cand){
       if (anchors.length >= durs.length) break;
-      if (anchors.every(a => Math.abs(a.t - c.t) > 4)) anchors.push(c);
+      if (anchors.every(a => Math.abs(a.t - c.t) > 3)) anchors.push(c);
     }
     anchors.sort((a, b) => a.t - b.t);
   } else {
-    anchors = durs.map((_, k) => {
+    for (let k = 0; k < durs.length; k++){
       let pos = (k + .5 + (skip ? .45 : 0)) / durs.length * total;
       let t = pool[0].start;
       for (const s of pool){ if (pos > s.dur) pos -= s.dur; else { t = s.start + pos; break; } }
-      const win = samples.filter(x => x.t > t - 2 && x.t < t + 2 && inMain(x.t));
-      return win.length ? win.reduce((a, b) => b.motion > a.motion ? b : a) : { t, cx: .5 };
-    });
+      const win = samples.filter(x => x.t > t - 2.5 && x.t < t + 2.5 && inMain(x.t));
+      // score = mouvement x (1 + 2 x différence visuelle avec le plan précédent)
+      const best = win.length ? win.reduce((a, b) =>
+        (b.motion * (1 + 2 * hd2(prevHist, b.hist))) >
+        (a.motion * (1 + 2 * hd2(prevHist, a.hist))) ? b : a) : { t, cx: .5, hist: null };
+      prevHist = best.hist || prevHist;
+      anchors.push(best);
+    }
   }
   const plans = []; let prevEnd = -1;
   anchors.forEach((a, k) => {
-    const len = durs[k] || 2.4;
+    const len = durs[k] || 1.6;
     let c0 = Math.max(0, a.t - len / 2);
     if (c0 < prevEnd + .1) c0 = prevEnd + .1;
     plans.push({ start: +c0.toFixed(2), end: +(c0 + len).toFixed(2), speed: 1, cx: a.cx });
@@ -800,7 +805,7 @@ function buildStage1(){
     const mid = grid(target - (hook ? 2.4 : 0) - 2.6, 'even')
       .filter(c => (!hook || Math.abs(c.start - hook.start) > 2.5) && c.end < rev.start);
     out.push(mkVariant('B_hook_process',
-      'Un cut toutes les 2-3s, effet caméra différent à chaque plan (zoom, pano, punch). Ouverture sur le moment le plus accrocheur, fin sur le reveal. Son du rush conservé.',
+      'Un cut toutes les 1-2s, image nouvelle et effet caméra différent à chaque plan. Ouverture sur le moment le plus accrocheur, fin sur le reveal. Son du rush conservé.',
       'Le process en vrai ⚡ #spraypaint',
       [...(hook ? [hook] : []), ...mid, rev], { feat: hd ? hd.feat : null }));
   }
@@ -809,13 +814,13 @@ function buildStage1(){
       speed: 1, cx: last.cx, fx: 'punch' };
     const mid = grid(target - 2.4, 'even').filter(c => c.end < rev.start);
     out.push(mkVariant('A_reveal',
-      'Le résultat fini dans la 1re seconde (boucle de curiosité), puis le process en cuts 2-3s avec effets caméra. Son conservé.',
+      'Le résultat fini dans la 1re seconde (boucle de curiosité), puis le process en cuts 1-2s, image nouvelle à chaque plan. Son conservé.',
       'Attends de voir le début 👀 #spraypaint', [rev, ...mid]));
   }
   { // P3 : pure action
     const mid = grid(target, 'action').map((c, k) => ({ ...c, fx: k % 2 ? 'zin' : 'punch' }));
     out.push(mkVariant('C_action',
-      'Uniquement les pics d\u2019intensité, cuts 2-3s, zooms marqués — zéro temps mort. Son conservé.',
+      'Uniquement les pics d\u2019intensité, cuts 1-2s, zooms marqués — zéro temps mort. Son conservé.',
       'Zéro temps mort \U0001F3AF #spraypaint', mid));
   }
   return out;
@@ -1105,12 +1110,63 @@ async function aiReview(blob, v, card){
   }
 }
 
+async function framesAt(times){
+  const cv = document.createElement('canvas'); cv.width = 180; cv.height = 320;
+  const c2 = cv.getContext('2d'); const out = [];
+  for (const t of times){
+    await seekTo(Math.max(0, t));
+    c2.drawImage(vid, ...cropRect(.5), 0, 0, 180, 320);
+    out.push(cv.toDataURL('image/jpeg', .5).split(',')[1]);
+  }
+  return out;
+}
+
+async function aiVerifyPlans(v){
+  const key = localStorage.getItem('autotok_apikey');
+  if (!key || !window._ana) return;
+  try {
+    progress('Vérification IA des plans — ' + v.name, 'une capture par cut', .05);
+    const imgs = await framesAt(v.clips.map(c => (c.start + c.end) / 2));
+    const content = [{ type: 'text', text:
+      'Voici ' + imgs.length + ' images, une par plan (dans l\u2019ordre) d\u2019un montage TikTok de spray paint art. ' +
+      'Règle : chaque plan doit apporter une image NOUVELLE (action, geste ou cadrage différent du plan précédent) et intéressante. ' +
+      'Réponds UNIQUEMENT en JSON strict : {"drop":[numéros des plans quasi identiques au précédent ou vides, à partir de 1]}' },
+      ...imgs.map(d => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d } }))];
+    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+        messages: [{ role: 'user', content }] }) });
+    const j = await r.json();
+    const m = ((j.content && j.content[0].text) || '').match(/\{[\s\S]*\}/);
+    if (!m) return;
+    const drop = (JSON.parse(m[0]).drop || []).map(n => n - 1).filter(i => i >= 0 && i < v.clips.length);
+    if (!drop.length){ v.hypothesis += ' ✔ Chaque cut vérifié par IA : tous différents.'; return; }
+    const { samples, segs } = window._ana;
+    const mains = segs.filter(s => s.main), pool = mains.length ? mains : segs;
+    const inMain = t => pool.some(s => t >= s.start && t <= s.end);
+    let swapped = 0;
+    for (const i of drop){
+      const c = v.clips[i]; if (!c) continue;
+      const len = c.end - c.start;
+      const cand = samples.filter(x => inMain(x.t) &&
+        v.clips.every(k => Math.abs(x.t - (k.start + k.end) / 2) > 3))
+        .sort((a, b) => b.motion - a.motion)[0];
+      if (cand){ c.start = +Math.max(0, cand.t - len / 2).toFixed(2);
+        c.end = +(c.start + len).toFixed(2); c.cx = cand.cx; swapped++; }
+    }
+    v.clips.sort((a, b) => a.start - b.start);
+    if (swapped) v.hypothesis += ' ✔ IA : ' + swapped + ' plan(s) doublon remplacé(s) avant rendu.';
+  } catch (e){}
+}
+
 async function renderAll(variants, stage1){
   const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
   window._lastVars = window._lastVars || {};
   let i = 0;
   for (const v of variants){
     i++;
+    await aiVerifyPlans(v);
     const blob = await renderVariant(v, v.name, i, variants.length);
     const url = URL.createObjectURL(blob);
     $('#results').style.display = 'block';

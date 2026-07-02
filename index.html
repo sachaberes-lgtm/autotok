@@ -62,13 +62,28 @@
   .err { color:#ff7b7b; }
   #warn { display:none; margin-top:16px; padding:12px 16px; border-radius:10px;
           background:#2b1d10; border:1px solid #5c3d1a; color:var(--acc2); font-size:13px; }
+  .post { margin-top:12px; padding:10px 12px; background:var(--bg);
+          border:1px solid var(--line); border-radius:10px; font-size:13px; }
+  .mini { margin-top:8px; margin-right:6px; padding:6px 12px; border-radius:8px; border:0;
+          background:var(--ok); color:#08281a; font-weight:600; cursor:pointer; font-size:12px; }
+  .mini.ghost { background:none; border:1px solid var(--line); color:var(--mut); }
+  .statrow { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .statrow input { width:31%; background:var(--card); border:1px solid var(--line);
+          border-radius:8px; color:var(--txt); padding:6px 8px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v6 · import iPhone</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v7 · labo & stats</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
+
+  <div class="chips" style="margin-bottom:4px">
+    <span class="chip on" id="tabM">🎬 Montage</span>
+    <span class="chip" id="tabL">🧪 Labo & stats</span>
+  </div>
+
+  <div id="pageMontage">
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
 
@@ -125,6 +140,23 @@
        download="hypotheses.md">📄 Télécharger les hypothèses + tableau de stats</a>
     <p class="note">Poste les variantes à ~24h d'intervalle, même créneau (18h-21h),
        note les stats à 48h. C'est comme ça qu'on apprend ce qui marche.</p>
+  </div>
+
+  </div>
+
+  <div id="pageLabo" style="display:none">
+    <div class="panel"><b>📋 Plan de route</b> — quoi poster, quand
+      <div id="plan"></div></div>
+    <div class="panel"><b>📊 Stats à noter</b> — 48h après chaque post
+      <div id="pending"></div></div>
+    <div class="panel"><b>🏆 Classement de tes hooks</b>
+      <div id="ranking"></div>
+      <p class="note" id="insights"></p></div>
+    <div class="panel">
+      <a class="dl" id="expcsv" href="#" download="autotok_stats.csv"
+         style="background:none;border:1px solid var(--line)">⬇ Exporter la base (CSV)</a>
+      <p class="note">Les données restent dans ce navigateur (localStorage) —
+         exporte de temps en temps pour les sauvegarder.</p></div>
   </div>
 
   <video id="vid" muted playsinline style="display:none"></video>
@@ -413,6 +445,132 @@ async function renderVariant(variant, label, idx, total){
   return new Blob(chunks, { type: mime.split(';')[0] || 'video/webm' });
 }
 
+
+/* ---------- LABO : base locale, plan de posts, apprentissage ---------- */
+const DBK = 'autotok_db_v1';
+const dbGet = () => { try { return JSON.parse(localStorage.getItem(DBK)) || { posts: [] }; }
+                      catch (e) { return { posts: [] }; } };
+const dbSet = d => localStorage.setItem(DBK, JSON.stringify(d));
+const fmtD = s => new Date(s).toLocaleDateString('fr-FR',
+  { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' +
+  new Date(s).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+function nextSlot(pending){        // prochain créneau 18h30, espacé de 24h
+  let t = new Date(); t.setHours(18, 30, 0, 0);
+  if (t <= new Date()) t.setDate(t.getDate() + 1);
+  const last = pending.map(p => new Date(p.plan)).sort((a, b) => b - a)[0];
+  if (last){ const after = new Date(last.getTime() + 864e5); if (after > t) t = after; }
+  return t;
+}
+
+function addToPlan(video, variants){
+  const d = dbGet();
+  for (const v of variants){
+    const slot = nextSlot(d.posts.filter(p => !p.posted));
+    d.posts.push({ id: Math.random().toString(16).slice(2) + Date.now(),
+      created: new Date().toISOString(), video, variant: v.name, hyp: v.hypothesis,
+      caption: v.caption, plan: slot.toISOString(), posted: null, stats: null });
+  }
+  dbSet(d); renderLabo();
+}
+
+function aggregates(){             // moyennes par famille de hook (A/B/C)
+  const by = {};
+  for (const p of dbGet().posts){
+    if (!p.stats) continue;
+    (by[p.variant[0]] = by[p.variant[0]] || []).push(p);
+  }
+  return Object.entries(by).map(([k, arr]) => {
+    const n = arr.length, avg = f => arr.reduce((a, p) => a + (+p.stats[f] || 0), 0) / n;
+    const eng = arr.reduce((a, p) => a + ((+p.stats.l || 0) + (+p.stats.c || 0) +
+      (+p.stats.p || 0)) / Math.max(+p.stats.v || 1, 1), 0) / n * 100;
+    return { k, n, vues: avg('v'), watch: avg('w'), eng,
+             score: avg('w') + 2 * eng };   // watch time + engagement, les 2 nerfs de l'algo
+  }).sort((a, b) => b.score - a.score);
+}
+
+function winnerLetter(){           // gagnant s'il a >=3 posts et +15% d'avance
+  const ag = aggregates().filter(x => x.n >= 3);
+  return (ag.length >= 2 && ag[0].score > ag[1].score * 1.15) ? ag[0].k : null;
+}
+
+function makeDuel(v){              // décline le hook gagnant en court vs long
+  const mk = (suffix, len) => {
+    const c = JSON.parse(JSON.stringify(v.clips));
+    const hk = c[0];
+    if (v.name[0] === 'A') hk.start = +(hk.end - len).toFixed(2);
+    else hk.end = +(hk.start + len).toFixed(2);
+    return { name: v.name[0] + suffix, caption: v.caption,
+      hypothesis: v.hypothesis + ' [duel : hook de ' + len + 's]', clips: c };
+  };
+  return [mk('1_hook_court', 1.2), mk('2_hook_long', 2.6)];
+}
+
+function renderLabo(){
+  const d = dbGet();
+  const plan = d.posts.filter(p => !p.posted)
+    .sort((a, b) => new Date(a.plan) - new Date(b.plan));
+  $('#plan').innerHTML = plan.length ? plan.map(p =>
+    `<div class="post"><b>${p.variant}</b> · prévu ${fmtD(p.plan)}<br>
+     <span class="note">💬 ${p.caption}</span><br>
+     <button class="mini" onclick="markPosted('${p.id}')">✓ Je viens de le poster</button>
+     <button class="mini ghost" onclick="delPost('${p.id}')">✕</button></div>`).join('')
+    : '<p class="note">Rien en attente — monte une vidéo, les variantes arrivent ici toutes seules.</p>';
+
+  const pend = d.posts.filter(p => p.posted && !p.stats);
+  $('#pending').innerHTML = pend.length ? pend.map(p => {
+    const late = Date.now() - new Date(p.posted) > 1728e5;
+    return `<div class="post"><b>${p.variant}</b> · posté ${fmtD(p.posted)}
+      ${late ? '<span style="color:var(--acc2)"> — 48h écoulées, note les stats !</span>' : ''}
+      <div class="statrow" id="st_${p.id}">
+      <input placeholder="vues" data-f="v"><input placeholder="watch %" data-f="w">
+      <input placeholder="likes" data-f="l"><input placeholder="comm." data-f="c">
+      <input placeholder="partages" data-f="p"><input placeholder="follows" data-f="f">
+      </div><button class="mini" onclick="saveStats('${p.id}')">💾 Enregistrer</button></div>`;
+  }).join('') : '<p class="note">Aucun post en attente de stats.</p>';
+
+  const ag = aggregates();
+  const max = Math.max(...ag.map(x => x.score), 1);
+  $('#ranking').innerHTML = ag.length ? ag.map((x, i) =>
+    `<div class="post">${i === 0 && x.n >= 3 ? '🏆 ' : ''}<b>Hook ${x.k}</b> (${x.n} posts)
+     — ${Math.round(x.vues)} vues moy. · ${x.watch.toFixed(0)}% watch · ${x.eng.toFixed(1)}% engag.
+     <div class="bar" style="margin-top:8px"><i style="width:${Math.round(100 * x.score / max)}%"></i></div></div>`).join('')
+    : '<p class="note">Pas encore de stats — le classement se remplira tout seul.</p>';
+
+  const win = winnerLetter();
+  $('#insights').textContent = win
+    ? `Ton hook ${win} domine nettement. Au prochain montage, il sera automatiquement décliné en 2 versions (hook court vs long) pour affiner — c'est le mode duel.`
+    : ag.length ? 'Pas encore assez de données pour trancher (≥3 posts par variante). Continue d\'alterner A, B et C.'
+    : 'Poste tes 3 premières variantes, note les stats à 48h, et les enseignements apparaîtront ici.';
+  [...$('#vars').children].forEach(ch => {
+    ch.textContent = ch.textContent.replace('🏆 ', '');
+    if (win && ch.dataset.v === win) ch.textContent = '🏆 ' + ch.textContent;
+  });
+}
+window.markPosted = id => { const d = dbGet();
+  const p = d.posts.find(x => x.id === id); if (p) p.posted = new Date().toISOString();
+  dbSet(d); renderLabo(); };
+window.delPost = id => { const d = dbGet();
+  d.posts = d.posts.filter(x => x.id !== id); dbSet(d); renderLabo(); };
+window.saveStats = id => { const d = dbGet();
+  const p = d.posts.find(x => x.id === id); if (!p) return;
+  p.stats = {}; document.querySelectorAll('#st_' + id + ' input')
+    .forEach(inp => p.stats[inp.dataset.f] = inp.value);
+  dbSet(d); renderLabo(); };
+
+$('#tabM').onclick = () => { $('#tabM').classList.add('on'); $('#tabL').classList.remove('on');
+  $('#pageMontage').style.display = 'block'; $('#pageLabo').style.display = 'none'; };
+$('#tabL').onclick = () => { $('#tabL').classList.add('on'); $('#tabM').classList.remove('on');
+  $('#pageMontage').style.display = 'none'; $('#pageLabo').style.display = 'block'; renderLabo(); };
+$('#expcsv').onclick = () => {
+  let csv = 'video,variante,hypothese,prevu,poste,vues,watch_pct,likes,commentaires,partages,follows\n';
+  for (const p of dbGet().posts){ const s = p.stats || {};
+    csv += [p.video, p.variant, '"' + p.hyp.replace(/"/g, "'") + '"', p.plan, p.posted || '',
+      s.v || '', s.w || '', s.l || '', s.c || '', s.p || '', s.f || ''].join(',') + '\n'; }
+  $('#expcsv').href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+};
+renderLabo();
+
 /* ---------- 5. ORCHESTRATION ---------- */
 $('#go').onclick = async () => {
   const wanted = [...$('#vars').children].filter(c=>c.classList.contains('on'))
@@ -429,6 +587,9 @@ $('#go').onclick = async () => {
     const cutAmt = Math.round(vid.duration - segs.reduce((a,s)=>a+s.dur,0));
     let variants = buildVariants(segs, target)
                    .filter(v => wanted.includes(v.name[0]));
+    const win = winnerLetter();
+    if ((win === 'A' || win === 'B') && wanted.includes(win))
+      variants = variants.flatMap(v => v.name[0] === win ? makeDuel(v) : [v]);
     const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
     let i = 0;
     for (const v of variants){
@@ -455,6 +616,7 @@ $('#go').onclick = async () => {
         card.appendChild(sh);
       }
     }
+    addToPlan(fileName, variants);
     let md = `# Hypothèses de hook — ${fileName}\n\n(${cutAmt}s de temps morts dégagés)\n\n`;
     for (const v of variants)
       md += `## ${v.name}\n\n**Hypothèse :** ${v.hypothesis}\n\n**Caption :** ${v.caption}\n\n`;

@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v13 · montage réel + QC IA</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v14 · cuts 2-3s + effets</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -506,16 +506,29 @@ async function renderVariant(variant, label, idx, total){
   const chunks = []; rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   const stopped = new Promise(r => rec.onstop = r);
   rec.start(250);
-  let rect = [0,0,vid.videoWidth,vid.videoHeight], run = true;
+  let rect = [0,0,vid.videoWidth,vid.videoHeight], cur = null, run = true;
   const loop = () => { if (!run) return;
-    ctx.drawImage(vid, ...rect, 0, 0, canvas.width, canvas.height);
+    let [sx, sy, sw, sh] = rect, z = 1, dx = 0;
+    if (cur && cur.fx){
+      const p = Math.min(1, Math.max(0,
+        (vid.currentTime - cur.start) / Math.max(.1, cur.end - cur.start)));
+      if (cur.fx === 'zin') z = 1 + .16 * p;
+      else if (cur.fx === 'zout') z = 1.16 - .16 * p;
+      else if (cur.fx === 'punch') z = 1.22;
+      else if (cur.fx === 'panl'){ z = 1.15; dx = p - .5; }
+      else if (cur.fx === 'panr'){ z = 1.15; dx = .5 - p; }
+    }
+    const sw2 = sw / z, sh2 = sh / z;
+    const sx2 = Math.max(0, Math.min(sx + (sw - sw2) / 2 + dx * (sw - sw2), sx + sw - sw2));
+    const sy2 = sy + (sh - sh2) / 2;
+    ctx.drawImage(vid, sx2, sy2, sw2, sh2, 0, 0, canvas.width, canvas.height);
     requestAnimationFrame(loop); };
   loop();
   const total_d = vDur(variant); let done_d = 0;
   for (const c of variant.clips){
     rec.pause();
     await seekTo(c.start);
-    rect = cropRect(c.cx);
+    rect = cropRect(c.cx); cur = c;
     vid.playbackRate = Math.min(16, c.speed);
     vid.muted = !!variant.mute || c.speed > 2.5;
     rec.resume();
@@ -700,7 +713,7 @@ function renderCutList(){
 }
 
 
-/* ---------- MONTAGE DYNAMIQUE : plans réels 1x + sujet principal ---------- */
+/* ---------- MONTAGE : cuts 2-3s, effets caméra, sujet principal ---------- */
 function segScenes(samples, segs){
   const hists = segs.map(s => {
     const sub = samples.filter(x => x.t >= s.start && x.t <= s.end && x.hist);
@@ -725,92 +738,94 @@ function segScenes(samples, segs){
   return nc;
 }
 
-function makeChunks(segs, samples){
-  // plans de ~3s à vitesse réelle, un par fenêtre de 5s, centrés sur le pic local
-  const chunks = [];
-  segs.forEach((s, si) => {
-    const sub = samples.filter(x => x.t >= s.start && x.t <= s.end);
-    let t = s.start;
-    while (t < s.end){
-      const win = sub.filter(x => x.t >= t && x.t < t + 5);
-      if (win.length){
-        const best = win.reduce((a, b) => b.motion > a.motion ? b : a);
-        const c0 = Math.max(s.start, best.t - 1.4), c1 = Math.min(s.end, best.t + 1.7);
-        if (c1 - c0 > 1.2) chunks.push({ start: +c0.toFixed(2), end: +c1.toFixed(2),
-          speed: 1, cx: best.cx, score: best.motion, seg: si,
-          scene: s.scene, main: s.main });
-      }
-      t += 5;
+function planGrid(pool, samples, budget, mode, skip){
+  // grille stricte : un plan toutes les 2-3s jusqu'à la durée cible
+  const pat = [2.2, 3, 2.4, 2.8, 2];
+  const durs = []; let d = 0, i = 0;
+  while (d < budget - .8){ const x = Math.min(pat[i % pat.length], budget - d);
+    if (x < 1.2) break; durs.push(x); d += x; i++; }
+  const total = pool.reduce((a, s) => a + s.dur, 0);
+  const inMain = t => pool.some(s => t >= s.start && t <= s.end);
+  let anchors;
+  if (mode === 'action'){
+    const cand = samples.filter(x => inMain(x.t))
+      .sort((a, b) => b.motion - a.motion).slice(0, durs.length * 4);
+    anchors = [];
+    for (const c of cand){
+      if (anchors.length >= durs.length) break;
+      if (anchors.every(a => Math.abs(a.t - c.t) > 4)) anchors.push(c);
     }
-  });
-  return chunks;
-}
-
-function assemble(chunks, budget, skip){
-  // 1 plan max hors sujet principal ; répartition sur tous les segments du sujet
-  const off = chunks.filter(c => !c.main).sort((a, b) => b.score - a.score).slice(0, 1);
-  const groups = {};
-  chunks.filter(c => c.main).forEach(c => (groups[c.seg] = groups[c.seg] || []).push(c));
-  for (const k in groups) groups[k].sort((a, b) => b.score - a.score);
-  const keys = Object.keys(groups);
-  const pick = [...off];
-  let dur = pick.reduce((a, c) => a + c.end - c.start, 0);
-  let round = skip || 0;
-  while (dur < budget){
-    let added = false;
-    for (const k of keys){
-      const c = groups[k][round];
-      if (c && dur < budget){ pick.push(c); dur += c.end - c.start; added = true; }
-    }
-    if (!added) break;
-    round++;
+    anchors.sort((a, b) => a.t - b.t);
+  } else {
+    anchors = durs.map((_, k) => {
+      let pos = (k + .5 + (skip ? .45 : 0)) / durs.length * total;
+      let t = pool[0].start;
+      for (const s of pool){ if (pos > s.dur) pos -= s.dur; else { t = s.start + pos; break; } }
+      const win = samples.filter(x => x.t > t - 2 && x.t < t + 2 && inMain(x.t));
+      return win.length ? win.reduce((a, b) => b.motion > a.motion ? b : a) : { t, cx: .5 };
+    });
   }
-  return pick.sort((a, b) => a.start - b.start);
+  const plans = []; let prevEnd = -1;
+  anchors.forEach((a, k) => {
+    const len = durs[k] || 2.4;
+    let c0 = Math.max(0, a.t - len / 2);
+    if (c0 < prevEnd + .1) c0 = prevEnd + .1;
+    plans.push({ start: +c0.toFixed(2), end: +(c0 + len).toFixed(2), speed: 1, cx: a.cx });
+    prevEnd = c0 + len;
+  });
+  return plans;
 }
 
 function mkVariant(name, hyp, cap, clips, extra){
   return Object.assign({ name, hypothesis: hyp, caption: cap, clips }, extra || {});
 }
 
+const FXCYCLE = ['zin', 'panr', 'zout', 'panl'];
 function buildStage1(){
-  const { samples, segs, chunks, target, skip } = window._ana;
+  const { samples, segs, target, skip } = window._ana;
+  const mains = segs.filter(s => s.main), pool = mains.length ? mains : segs;
+  const last = pool[pool.length - 1];
+  const hd = detectHook(samples, pool, target);
   const out = [];
-  const mains = segs.filter(s => s.main);
-  const hd = detectHook(samples, mains.length ? mains : segs, target);
-  const hookClip = hd ? { ...hd.clips[0] } : null;
-  const last = mains[mains.length - 1] || segs[segs.length - 1];
-  const b1 = assemble(chunks, target - (hookClip ? 2.2 : 0), skip);
-  out.push(mkVariant('B_bestof',
-    'Plans réels sans accéléré, cuts serrés sur les meilleurs moments du sujet principal, hook détecté en ouverture. Son conservé.',
-    'Le process en vrai ⚡ #spraypaint',
-    hookClip ? [hookClip, ...b1.filter(c => Math.abs(c.start - hookClip.start) > 2.2)] : b1,
-    { feat: hd ? hd.feat : null }));
-  const rl = Math.min(2.2, last.dur);
-  out.push(mkVariant('A_reveal',
-    'Le résultat fini dans la première seconde, puis le process en plans réels. Son conservé.',
-    'Attends de voir le début 👀 #spraypaint',
-    [{ start: +(last.end - rl).toFixed(2), end: last.end, speed: 1, cx: last.cx },
-     ...assemble(chunks, target - rl, skip)]));
-  const act = segs.reduce((a, s) => a + s.dur, 0);
-  const bs = Math.min(12, Math.max(2, act / Math.max(target - 2, 5)));
-  const cl = segs.map(s => ({ start: s.start, end: s.end, speed: bs, cx: s.cx }));
-  const lc = cl[cl.length - 1], cut = Math.max(lc.start, lc.end - 1.5);
-  if (cut > lc.start){ lc.end = cut;
-    cl.push({ start: cut, end: segs[segs.length - 1].end, speed: 1, cx: lc.cx }); }
-  out.push(mkVariant('C_timelapse',
-    'Tout le process en accéléré assumé (le seul mode rapide), reveal final en vitesse réelle. Muet : ajoute un son tendance.',
-    'Toute la toile en ' + Math.round(target) + 's ⏱ #satisfying',
-    fit(cl, target, 0, 16), { mute: true }));
+  const grid = (budget, mode) => {
+    const p = planGrid(pool, samples, budget, mode, skip);
+    p.forEach((c, k) => c.fx = FXCYCLE[k % FXCYCLE.length]);
+    return p;
+  };
+  { // P1 : hook + process + reveal
+    const hook = hd ? { ...hd.clips[0], end: +(hd.clips[0].start + 2.4).toFixed(2),
+      speed: 1, fx: 'punch' } : null;
+    const rev = { start: +(Math.max(last.start, last.end - 2.6)).toFixed(2), end: last.end,
+      speed: 1, cx: last.cx, fx: 'zin' };
+    const mid = grid(target - (hook ? 2.4 : 0) - 2.6, 'even')
+      .filter(c => (!hook || Math.abs(c.start - hook.start) > 2.5) && c.end < rev.start);
+    out.push(mkVariant('B_hook_process',
+      'Un cut toutes les 2-3s, effet caméra différent à chaque plan (zoom, pano, punch). Ouverture sur le moment le plus accrocheur, fin sur le reveal. Son du rush conservé.',
+      'Le process en vrai ⚡ #spraypaint',
+      [...(hook ? [hook] : []), ...mid, rev], { feat: hd ? hd.feat : null }));
+  }
+  { // P2 : reveal d'abord
+    const rev = { start: +(Math.max(last.start, last.end - 2.4)).toFixed(2), end: last.end,
+      speed: 1, cx: last.cx, fx: 'punch' };
+    const mid = grid(target - 2.4, 'even').filter(c => c.end < rev.start);
+    out.push(mkVariant('A_reveal',
+      'Le résultat fini dans la 1re seconde (boucle de curiosité), puis le process en cuts 2-3s avec effets caméra. Son conservé.',
+      'Attends de voir le début 👀 #spraypaint', [rev, ...mid]));
+  }
+  { // P3 : pure action
+    const mid = grid(target, 'action').map((c, k) => ({ ...c, fx: k % 2 ? 'zin' : 'punch' }));
+    out.push(mkVariant('C_action',
+      'Uniquement les pics d\u2019intensité, cuts 2-3s, zooms marqués — zéro temps mort. Son conservé.',
+      'Zéro temps mort \U0001F3AF #spraypaint', mid));
+  }
   return out;
 }
 
 function buildStage2(f){
   const t0 = window._ana.target, out = [];
-  const plans = f === 'C'
-    ? [['1_court', Math.max(10, t0 - 7), 0], ['2_normal', t0, 0], ['3_long', Math.min(30, t0 + 7), 0]]
-    : [['1_court', Math.max(10, t0 - 6), 0], ['2_long', Math.min(30, t0 + 6), 0], ['3_autres_plans', t0, 1]];
   const idx = { B: 0, A: 1, C: 2 }[f] ?? 0;
-  for (const [suf, t2, sk] of plans){
+  for (const [suf, t2, sk] of [['1_court', Math.max(10, t0 - 6), 0],
+      ['2_long', Math.min(30, t0 + 6), 0], ['3_autres_plans', t0, 1]]){
     window._ana.target = t2; window._ana.skip = sk;
     const v = buildStage1()[idx];
     v.name = f + suf;

@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v10 · lecture .mov</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v11 · conversion auto</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -105,6 +105,7 @@
     <p><b>Glisse ton rush ici</b><br>ou clique pour choisir un fichier</p>
     <input type="file" id="fi" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
     <div id="fileinfo"></div>
+    <p class="note" id="convnote" style="display:none"></p>
     <p class="note" id="iostip" style="display:none">💡 iPhone : si un camembert de chargement
        mouline longtemps après le choix de la vidéo, annule et passe par
        <b>Choisir un fichier → app Fichiers</b> (enregistre d'abord le rush dans Fichiers
@@ -253,6 +254,7 @@ setInterval(() => {
 function human(b){ return b>1e9?(b/1e9).toFixed(1)+' Go':b>1e6?(b/1e6).toFixed(0)+' Mo':(b/1e3).toFixed(0)+' Ko'; }
 
 function loadFile(f){
+  window._lastFile = f;
   if (fileURL) URL.revokeObjectURL(fileURL);
   fileURL = URL.createObjectURL(f); fileName = f.name;
   vid.src = fileURL;
@@ -263,15 +265,13 @@ function loadFile(f){
   };
   vid.onerror = () => {
     const info = $('#fileinfo'); info.style.display = 'block';
-    const hevcOK = vid.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
-    info.innerHTML = '❌ <b>Vidéo illisible par ce navigateur.</b> Un .mov iPhone est souvent ' +
-      'encodé en HEVC (H.265)' + (hevcOK ? '' : ', que ce navigateur ne décode pas') + '.<br>' +
-      '✅ <b>La solution durable :</b> sur iPhone, Réglages → Appareil photo → Formats → ' +
-      '« <b>Le plus compatible</b> » — tes prochains rushs (.mov en H.264) passeront partout.<br>' +
-      '🔁 <b>Pour CE rush :</b> ouvre-le avec <b>Clipchamp</b> (déjà sur Windows 11) et exporte en MP4, ' +
-      'ou réessaie dans <b>Microsoft Edge</b> (il lit le HEVC sur la plupart des PC).';
-    info.style.color = '#ff9f9f'; };
-  vid.onloadedmetadata_ok = true;
+    info.style.color = '#ff9f9f';
+    info.innerHTML = '❌ <b>Vidéo illisible — sûrement un .mov iPhone en HEVC.</b><br>' +
+      '<button class="mini" onclick="autoConvert()" style="margin-top:10px">' +
+      '🔁 Convertir automatiquement ici (H.264)</button><br>' +
+      '<span class="note">Conversion 100% locale, rien n\u2019est envoyé. Compte environ la durée ' +
+      'du rush. Pour éviter ça : iPhone → Réglages → Appareil photo → Formats → ' +
+      '« Le plus compatible ».</span>'; };
 }
 
 function progress(step, detail, frac){
@@ -500,6 +500,62 @@ async function renderVariant(variant, label, idx, total){
 }
 
 
+
+
+/* ---------- CONVERTISSEUR HEVC -> H.264 (ffmpeg.wasm, 100% local) ---------- */
+let ffmpeg = null;
+const loadScript = src => new Promise((res, rej) => {
+  const s = document.createElement('script');
+  s.src = src; s.onload = res; s.onerror = () => rej(new Error('réseau'));
+  document.head.appendChild(s); });
+const blobURL2 = async (u, t) => URL.createObjectURL(
+  new Blob([await (await fetch(u)).arrayBuffer()], { type: t }));
+
+async function getFFmpeg(){
+  if (ffmpeg) return ffmpeg;
+  progress('Chargement du convertisseur (~30 Mo, une seule fois)...', '', .02);
+  await loadScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
+  const ff = new FFmpegWASM.FFmpeg();
+  const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+  await ff.load({ coreURL: base + '/ffmpeg-core.js', wasmURL: base + '/ffmpeg-core.wasm',
+    classWorkerURL: await blobURL2(
+      'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js', 'text/javascript') });
+  ff.on('progress', e => progress('Conversion en MP4 (H.264)...',
+    Math.round((e.progress || 0) * 100) + '%', Math.min(e.progress || 0, 1)));
+  ffmpeg = ff; return ff;
+}
+
+window.autoConvert = async () => {
+  const f = window._lastFile;
+  if (!f) return;
+  $('#go').disabled = true; busy = true; keepAwake(true);
+  try {
+    const ff = await getFFmpeg();
+    try { await ff.unmount('/mnt'); } catch(e){}
+    try { await ff.createDir('/mnt'); } catch(e){}
+    await ff.mount('WORKERFS', { files: [f] }, '/mnt');
+    try { await ff.deleteFile('out.mp4'); } catch(e){}
+    progress('Conversion en MP4 (H.264)...', 'démarrage', .03);
+    await ff.exec(['-i', '/mnt/' + f.name, '-c:v', 'libx264', '-preset', 'ultrafast',
+      '-crf', '26', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-an',
+      '-movflags', '+faststart', 'out.mp4']);
+    const data = await ff.readFile('out.mp4');
+    try { await ff.unmount('/mnt'); } catch(e){}
+    const mp4 = new File([data.buffer], f.name.replace(/\.[^.]+$/, '') + '_h264.mp4',
+      { type: 'video/mp4' });
+    progress('Conversion terminée ✓', human(mp4.size), 1);
+    const dl = URL.createObjectURL(mp4);
+    $('#convnote').style.display = 'block';
+    $('#convnote').innerHTML = '💾 <a href="' + dl + '" download="' + mp4.name +
+      '" style="color:var(--acc2)">Garder la version convertie</a> — pour ne pas reconvertir la prochaine fois.';
+    $('#fileinfo').style.color = '';
+    loadFile(mp4);
+  } catch (err) {
+    $('#fileinfo').innerHTML = '❌ Conversion impossible ici (' + err.message +
+      '). Ouvre AutoTok dans Chrome/Edge sur le site : <b>sachaberes-lgtm.github.io/autotok</b>';
+  }
+  busy = false; keepAwake(false);
+};
 
 /* ---------- DÉTECTEUR DE HOOK : 7 signaux issus de la recherche ----------
    mouvement (stimulation), surprise (pattern interrupt), nouveauté couleur,

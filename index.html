@@ -76,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v17 · dynamisme boosté</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v18 · récit bombe → fleur</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -523,7 +523,7 @@ async function renderVariant(variant, label, idx, total){
   rec.start(250);
   let rect = [0,0,vid.videoWidth,vid.videoHeight], cur = null, run = true;
   const loop = () => { if (!run) return;
-    let [sx, sy, sw, sh] = rect, z = 1, dx = 0, dy = 0, flash = 0;
+    let [sx, sy, sw, sh] = rect, z = 1, dx = 0, dy = 0;
     if (cur){
       const el = vid.currentTime - cur.start;
       const p = Math.min(1, Math.max(0, el / Math.max(.1, cur.end - cur.start)));
@@ -537,14 +537,12 @@ async function renderVariant(variant, label, idx, total){
         const k = (1 - el / .28) * .018;
         dx += (Math.random() - .5) * k * 30; dy = (Math.random() - .5) * k * sh;
       }
-      if (el >= 0 && el < .07) flash = .75 * (1 - el / .07);         // flash blanc au cut
     }
     const sw2 = sw / z, sh2 = sh / z;
     const sx2 = Math.max(0, Math.min(sx + (sw - sw2) / 2 + dx * (sw - sw2), sx + sw - sw2));
     const sy2 = Math.max(0, Math.min(sy + (sh - sh2) / 2 + dy, sy + sh - sh2));
     ctx.drawImage(vid, sx2, sy2, sw2, sh2, 0, 0, canvas.width, canvas.height);
-    if (flash > 0){ ctx.fillStyle = 'rgba(255,255,255,' + flash.toFixed(2) + ')';
-      ctx.fillRect(0, 0, canvas.width, canvas.height); }
+
     requestAnimationFrame(loop); };
   loop();
   const total_d = vDur(variant); let done_d = 0;
@@ -834,58 +832,85 @@ function mkVariant(name, hyp, cap, clips, extra){
 }
 
 const FXCYCLE = ['snap', 'zin', 'panr', 'zout', 'panl'];
+
+function planStages(pool, samples, budget, dense){
+  // découpe la PROGRESSION de la transformation en étapes égales :
+  // 1 étape = 1 plan, ordre chronologique garanti, le récit avance à chaque cut
+  const inMain = t => pool.some(s => t >= s.start && t <= s.end);
+  const idx = [];
+  samples.forEach((s, i) => { if (inMain(s.t)) idx.push(i); });
+  let cum = 0; const prog = new Map();
+  for (const i of idx){ cum += Math.max(0, samples[i].impact || 0); prog.set(i, cum); }
+  const total = cum || 1;
+  const pat = dense ? [0.9, 1.3, 0.8, 1.5, 1.0] : [1.4, 1.8, 1.1, 2.0, 1.4];
+  const durs = []; let d = 0, k = 0;
+  while (d < budget - .5){ const x = Math.min(pat[k % pat.length], budget - d);
+    if (x < .5) break; durs.push(x); d += x; k++; }
+  const N = Math.max(1, durs.length);
+  const hd2 = (a, b) => (a && b) ? a.reduce((s, v, j) => s + Math.abs(v - b[j]), 0) / 2 : .5;
+  const plans = []; let prevEnd = -1, prevHist = null;
+  for (let q = 0; q < N; q++){
+    const lo = q / N * total, hi = (q + 1) / N * total;
+    const win = idx.filter(i => prog.get(i) > lo && prog.get(i) <= hi);
+    if (!win.length) continue;
+    const bi = win.reduce((a, b) =>
+      ((samples[b].work || 0) * (1 + hd2(prevHist, samples[b].hist))) >
+      ((samples[a].work || 0) * (1 + hd2(prevHist, samples[a].hist))) ? b : a);
+    const s = samples[bi]; prevHist = s.hist || prevHist;
+    const len = durs[plans.length] || 1.3;
+    let c0 = Math.max(0, s.t - len / 2);
+    if (c0 < prevEnd + .1) c0 = prevEnd + .1;
+    plans.push({ start: +c0.toFixed(2), end: +(c0 + len).toFixed(2), speed: 1,
+      cx: s.cx, hit: (s.athit || 0) > .03 });
+    prevEnd = c0 + len;
+  }
+  return plans;
+}
+
 function buildStage1(){
-  const { samples, segs, target, skip } = window._ana;
+  const { samples, segs, target } = window._ana;
   const mains = segs.filter(s => s.main), pool = mains.length ? mains : segs;
-  const last = pool[pool.length - 1];
-  const hd = detectHook(samples, pool, target);
-  const out = [];
-  const grid = (budget, mode) => {
-    const p = planGrid(pool, samples, budget, mode, skip);
-    p.forEach((c, k) => c.fx = FXCYCLE[k % FXCYCLE.length]);
+  const first = pool[0], last = pool[pool.length - 1];
+  const openLen = 1.6, closeLen = 2.6;
+  const opener = { start: first.start, end: +(first.start + openLen).toFixed(2),
+    speed: 1, cx: first.cx, fx: 'zin', noRamp: true };      // la bombe intacte
+  const closer = { start: +Math.max(last.start, last.end - closeLen).toFixed(2),
+    end: last.end, speed: 1, cx: last.cx, fx: 'zout', noRamp: true }; // la fleur posée
+  const steps = (budget, dense) => {
+    const p = planStages(pool, samples, budget, dense || window._ana.altDense)
+      .filter(c => c.start > opener.end + .2 && c.end < closer.start - .2);
+    p.forEach((c, k) => c.fx = FXCYCLE[(k + 1) % FXCYCLE.length]);
     return p;
   };
-  { // P1 : hook + process + reveal
-    const hook = hd ? { ...hd.clips[0], end: +(hd.clips[0].start + 2.4).toFixed(2),
-      speed: 1, fx: 'punch', noRamp: true } : null;
-    const rev = { start: +(Math.max(last.start, last.end - 2.6)).toFixed(2), end: last.end,
-      speed: 1, cx: last.cx, fx: 'zin', noRamp: true };
-    const mid = grid(target - (hook ? 2.4 : 0) - 2.6, 'even')
-      .filter(c => (!hook || Math.abs(c.start - hook.start) > 2.5) && c.end < rev.start);
-    out.push(mkVariant('B_hook_process',
-      'Un cut toutes les 1-2s, image nouvelle et effet caméra différent à chaque plan. Ouverture sur le moment le plus accrocheur, fin sur le reveal. Son du rush conservé.',
-      'Le process en vrai ⚡ #spraypaint',
-      [...(hook ? [hook] : []), ...mid, rev], { feat: hd ? hd.feat : null }));
-  }
-  { // P2 : reveal d'abord
-    const rev = { start: +(Math.max(last.start, last.end - 2.4)).toFixed(2), end: last.end,
-      speed: 1, cx: last.cx, fx: 'punch', noRamp: true };
-    const mid = grid(target - 2.4, 'even').filter(c => c.end < rev.start);
-    out.push(mkVariant('A_reveal',
-      'Le résultat fini dans la 1re seconde (boucle de curiosité), puis le process en cuts 1-2s, image nouvelle à chaque plan. Son conservé.',
-      'Attends de voir le début 👀 #spraypaint', [rev, ...mid]));
-  }
-  { // P3 : pure action
-    const mid = grid(target, 'action').map((c, k) => ({ ...c, fx: k % 2 ? 'zin' : 'punch' }));
-    out.push(mkVariant('C_action',
-      'Uniquement les pics d\u2019intensité, cuts 1-2s, zooms marqués — zéro temps mort. Son conservé.',
-      'Zéro temps mort \U0001F3AF #spraypaint', mid));
-  }
+  const out = [];
+  out.push(mkVariant('B_etapes',
+    'Le récit du process : la bombe intacte en ouverture, puis chaque étape de transformation dans l\u2019ordre (une étape = un plan, cuts 1-2s), et la fleur finie posée sur la table en clôture. Son conservé.',
+    'De la bombe à la fleur \U0001F339 #spraypaint',
+    [opener, ...steps(target - openLen - closeLen), closer]));
+  out.push(mkVariant('A_reveal',
+    'La fleur finie dans la 1re seconde (boucle de curiosité), puis tout le récit bombe \u2192 fleur, étape par étape.',
+    'Attends de voir avec quoi c\u2019est fait \U0001F440',
+    [{ ...closer, fx: 'punch' }, { ...opener, fx: 'zin' },
+     ...steps(target - closeLen - openLen)]));
+  out.push(mkVariant('C_serre',
+    'Le même récit bombe \u2192 fleur mais en rafale : plans de 0,8-1,5s, zooms plus marqués.',
+    'Chaque étape compte \u26A1 #spraypaint',
+    [opener, ...steps(target - openLen - closeLen, true).map((c, k) =>
+      ({ ...c, fx: k % 2 ? 'zin' : 'snap' })), closer]));
   return out;
 }
 
 function buildStage2(f){
   const t0 = window._ana.target, out = [];
   const idx = { B: 0, A: 1, C: 2 }[f] ?? 0;
-  for (const [suf, t2, sk] of [['1_court', Math.max(10, t0 - 6), 0],
-      ['2_long', Math.min(30, t0 + 6), 0], ['3_autres_plans', t0, 1]]){
-    window._ana.target = t2; window._ana.skip = sk;
+  for (const [suf, t2, alt] of [['1_court', Math.max(10, t0 - 6), false],
+      ['2_long', Math.min(30, t0 + 6), false], ['3_plus_de_plans', t0, true]]){
+    window._ana.target = t2; window._ana.altDense = alt;
     const v = buildStage1()[idx];
     v.name = f + suf;
-    if (sk) v.hypothesis += ' (autres plans du même sujet)';
     out.push(v);
   }
-  window._ana.target = t0; window._ana.skip = 0;
+  window._ana.target = t0; window._ana.altDense = false;
   return out;
 }
 

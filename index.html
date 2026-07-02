@@ -1160,8 +1160,7 @@ $('#go').onclick = async () => {
     const segs = findSegments(samples, 0.3);
     if (!segs.length) throw new Error('Aucune action détectée dans la vidéo.');
     const nScenes = segScenes(samples, segs);
-    const chunks = makeChunks(segs, samples);
-    window._ana = { samples, segs, chunks, target, skip: 0 };
+    window._ana = { samples, segs, target, skip: 0 };
     const cutAmt = Math.round((vid.duration || 0) - segs.reduce((a, s) => a + s.dur, 0));
     const variants = buildStage1();
     await renderAll(variants, true);

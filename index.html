@@ -68,6 +68,7 @@
           background:var(--ok); color:#08281a; font-weight:600; cursor:pointer; font-size:12px; }
   .mini.ghost { background:none; border:1px solid var(--line); color:var(--mut); }
   .statrow { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  a.mini { display:inline-block; text-decoration:none; }
   .statrow input { width:31%; background:var(--card); border:1px solid var(--line);
           border-radius:8px; color:var(--txt); padding:6px 8px; font-size:12px; }
 </style>
@@ -75,7 +76,7 @@
 <body>
 <div class="wrap">
   <h1>Auto<span>Tok</span> 🎨</h1>
-  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v7 · labo & stats</b>
+  <p class="sub">Glisse ta session de spray → récupère tes TikToks montés. <b style="color:var(--acc2)">v9 · agenda multi-plateformes</b>
      Tout se passe dans ton navigateur, rien n'est envoyé sur un serveur.</p>
 
   <div class="chips" style="margin-bottom:4px">
@@ -84,6 +85,18 @@
   </div>
 
   <div id="pageMontage">
+
+  <div class="panel" id="howto">
+    <b>Comment ça marche</b>
+    <p class="note" style="margin-top:8px">
+    1️⃣ <b>Glisse ton rush</b> (la session entière, brute) → l’app vire les temps morts et fabrique
+    4 TikToks avec 4 hooks différents.<br>
+    2️⃣ <b>Poste-les selon l’agenda</b> de l’onglet Labo (un par créneau, caption fournie,
+    bouton direct vers TikTok/YouTube/Insta).<br>
+    3️⃣ <b>Note les stats à 48h</b> → le détecteur de hook apprend ce qui marche sur TON audience
+    et les prochains montages s’améliorent tout seuls.</p>
+    <button class="mini ghost" id="hideHow">OK, compris ✓</button>
+  </div>
 
   <div id="warn">⚠️ Pour de meilleurs résultats, utilise Chrome ou Edge sur ordinateur.</div>
 
@@ -119,6 +132,7 @@
         <span class="chip on" data-v="A">A · Reveal d'abord</span>
         <span class="chip on" data-v="B">B · Grosse action</span>
         <span class="chip on" data-v="C">C · Timelapse</span>
+        <span class="chip on" data-v="D">D · Hook auto 🎯</span>
       </div>
     </div>
     <button id="go" disabled>Monter mes TikToks</button>
@@ -145,10 +159,35 @@
   </div>
 
   <div id="pageLabo" style="display:none">
+    <div class="panel"><b>⚙️ Réglages de publication</b>
+      <div class="row"><label>Plateformes</label>
+        <div class="chips" id="plats">
+          <span class="chip" data-p="tiktok">TikTok</span>
+          <span class="chip" data-p="shorts">YouTube Shorts</span>
+          <span class="chip" data-p="reels">Insta Reels</span></div></div>
+      <div class="row"><label>Jours de post</label>
+        <div class="chips" id="pdays">
+          <span class="chip" data-d="1">Lun</span><span class="chip" data-d="2">Mar</span>
+          <span class="chip" data-d="3">Mer</span><span class="chip" data-d="4">Jeu</span>
+          <span class="chip" data-d="5">Ven</span><span class="chip" data-d="6">Sam</span>
+          <span class="chip" data-d="0">Dim</span></div></div>
+      <div class="row"><label>Heure</label>
+        <input type="time" id="phour" value="18:30"
+          style="background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:6px 10px"></div>
+      <p class="note">Shorts part 30 min après TikTok, Reels 60 min après — même contenu,
+        jamais en même temps.</p></div>
+
     <div class="panel"><b>📋 Plan de route</b> — quoi poster, quand
-      <div id="plan"></div></div>
+      <div id="plan"></div>
+      <a class="dl" id="expics" href="#" download="autotok_agenda.ics"
+         style="background:none;border:1px solid var(--line)">📅 Mettre l’agenda dans mon calendrier (.ics)</a></div>
+
+    <div class="panel"><b>🏁 Duels en cours</b> — quelle variante gagne, vidéo par vidéo
+      <div id="duels"></div></div>
     <div class="panel"><b>📊 Stats à noter</b> — 48h après chaque post
       <div id="pending"></div></div>
+    <div class="panel"><b>🎯 Détecteur de hook</b> — ce qu'il regarde pour choisir l'ouverture
+      <div id="detector"></div></div>
     <div class="panel"><b>🏆 Classement de tes hooks</b>
       <div id="ranking"></div>
       <p class="note" id="insights"></p></div>
@@ -250,12 +289,16 @@ async function analyze(){
         ctx.drawImage(vid, 0, 0, W, H);
         const d = ctx.getImageData(0, 0, W, H).data, n = W*H;
         const gray = new Float32Array(n), hist = new Float32Array(64);
+        let satSum = 0;
         for (let i=0,p=0;i<n;i++,p+=4){
           const r=d[p],g=d[p+1],b=d[p+2];
           gray[i]=.299*r+.587*g+.114*b;
           hist[((r>>6)<<4)|((g>>6)<<2)|(b>>6)]++;
+          satSum += (Math.max(r,g,b)-Math.min(r,g,b))/255;
         }
         for (let i=0;i<64;i++) hist[i]/=n;
+        let gm=0; for (let i=0;i<n;i++) gm+=gray[i]; gm/=n;
+        let gv=0; for (let i=0;i<n;i++) gv+=(gray[i]-gm)*(gray[i]-gm);
         let motion=0, cx=.5;
         if (prevG){
           let cnt=0,sx=0;
@@ -265,7 +308,8 @@ async function analyze(){
         let nov=0;
         if (prevH){ for (let i=0;i<64;i++) nov+=Math.abs(hist[i]-prevH[i]); nov/=2; }
         prevG=gray; prevH=hist;
-        samples.push({t, motion, novelty:nov, cx});
+        samples.push({t, motion, novelty:nov, cx,
+          sat: satSum/n, con: Math.sqrt(gv/n)/64, hist: Array.from(hist)});
         progress('Analyse du rush...', `${Math.round(t)}s / ${Math.round(vid.duration)}s`,
                  t/vid.duration);
       }
@@ -446,6 +490,78 @@ async function renderVariant(variant, label, idx, total){
 }
 
 
+
+/* ---------- DÉTECTEUR DE HOOK : 7 signaux issus de la recherche ----------
+   mouvement (stimulation), surprise (pattern interrupt), nouveauté couleur,
+   saturation + contraste (saillance), ressemblance au final (curiosity gap),
+   originalité du moment. Les poids s'ajustent avec TES stats. */
+const zArr = a => { const mu = a.reduce((x,y)=>x+y,0)/a.length,
+  sd = Math.sqrt(a.reduce((x,y)=>x+(y-mu)*(y-mu),0)/a.length) || 1;
+  return a.map(v => (v-mu)/sd); };
+const HOOK_DEF = { motion:.20, burst:.25, novelty:.15, sat:.05, con:.05, reveal:.20, uniq:.10 };
+const HWK = 'autotok_hookw';
+
+function hookWeights(){
+  try { const s = JSON.parse(localStorage.getItem(HWK));
+    if (s && s.n >= 4){ const al = Math.min(s.n/10, .8), w = {};
+      for (const k in HOOK_DEF) w[k] = (1-al)*HOOK_DEF[k] + al*(s.w[k] || 0);
+      return w; } } catch(e){}
+  return HOOK_DEF;
+}
+
+function hookFeatures(samples){
+  const n = samples.length;
+  const m = smooth(samples.map(s=>s.motion)), nov = smooth(samples.map(s=>s.novelty));
+  const sat = smooth(samples.map(s=>s.sat||0)), con = smooth(samples.map(s=>s.con||0));
+  const burst = m.map((x,i)=>{ const a = Math.max(0,i-6);
+    const base = m.slice(a, Math.max(i, a+1));
+    return Math.max(0, x - base.reduce((p,q)=>p+q,0)/base.length); });
+  const fin = samples[n-1].hist;
+  const reveal = samples.map(s => (s.hist && fin)
+    ? 1 - .5*s.hist.reduce((a,v,j)=>a+Math.abs(v-fin[j]),0) : 0);
+  const mean = new Array(64).fill(0);
+  for (const s of samples) if (s.hist) for (let j=0;j<64;j++) mean[j] += s.hist[j]/n;
+  const uniq = samples.map(s => s.hist
+    ? .5*s.hist.reduce((a,v,j)=>a+Math.abs(v-mean[j]),0) : 0);
+  return { motion:[...m], burst, novelty:[...nov], sat:[...sat], con:[...con], reveal, uniq };
+}
+
+function detectHook(samples, segs, target){
+  if (samples.length < 10 || !segs.length) return null;
+  const F = hookFeatures(samples), W = hookWeights();
+  const zf = {}; for (const k in F) zf[k] = zArr(F[k]);
+  const score = samples.map((_,i) =>
+    Object.keys(W).reduce((a,k) => a + W[k]*zf[k][i], 0));
+  let best = -1e9, bi = -1;
+  samples.forEach((s,i) => {
+    if (score[i] > best && segs.some(g => s.t >= g.start && s.t <= g.end)){
+      best = score[i]; bi = i; } });
+  if (bi < 0) return null;
+  const t = samples[bi].t, h0 = Math.max(0, t-1);
+  const feat = {}; for (const k in F) feat[k] = +F[k][bi].toFixed(4);
+  const clips = fit([{ start:h0, end:h0+2.2, speed:1, cx:samples[bi].cx },
+    ...pickBody(segs, target*2).map(g=>({start:g.start,end:g.end,speed:1.6,cx:g.cx}))], target);
+  return { name:'D_hook_auto', feat,
+    hypothesis:`Hook détecté à ${Math.round(t)}s par le détecteur multi-signaux `+
+      `(mouvement, surprise, couleurs, curiosity gap...). Il apprend de tes stats à chaque post noté.`,
+    caption:'Ce moment-là \u{1F92F} #spraypaint', clips };
+}
+
+function learnHookWeights(){
+  const posts = dbGet().posts.filter(p => p.stats && p.feat);
+  if (posts.length < 4) return;
+  const perf = zArr(posts.map(p => (+p.stats.w||0) +
+    2*((+p.stats.l||0)+(+p.stats.c||0)+(+p.stats.p||0))/Math.max(+p.stats.v||1,1)*100));
+  const w = {}; let norm = 0;
+  for (const k in HOOK_DEF){
+    const fv = zArr(posts.map(p => +p.feat[k] || 0));
+    const c = fv.reduce((a,v,i)=>a+v*perf[i],0)/posts.length;  // corrélation signal<->perf
+    w[k] = c; norm += Math.abs(c);
+  }
+  if (norm > 0) for (const k in w) w[k] /= norm;
+  localStorage.setItem(HWK, JSON.stringify({ n: posts.length, w }));
+}
+
 /* ---------- LABO : base locale, plan de posts, apprentissage ---------- */
 const DBK = 'autotok_db_v1';
 const dbGet = () => { try { return JSON.parse(localStorage.getItem(DBK)) || { posts: [] }; }
@@ -455,21 +571,39 @@ const fmtD = s => new Date(s).toLocaleDateString('fr-FR',
   { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' +
   new Date(s).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-function nextSlot(pending){        // prochain créneau 18h30, espacé de 24h
-  let t = new Date(); t.setHours(18, 30, 0, 0);
-  if (t <= new Date()) t.setDate(t.getDate() + 1);
-  const last = pending.map(p => new Date(p.plan)).sort((a, b) => b - a)[0];
-  if (last){ const after = new Date(last.getTime() + 864e5); if (after > t) t = after; }
-  return t;
+const CFGK = 'autotok_cfg';
+const cfgGet = () => { try { return Object.assign({ plats:['tiktok'], days:[0,1,2,3,4,5,6], hour:'18:30' },
+  JSON.parse(localStorage.getItem(CFGK)) || {}); }
+  catch(e){ return { plats:['tiktok'], days:[0,1,2,3,4,5,6], hour:'18:30' }; } };
+const cfgSet = c => localStorage.setItem(CFGK, JSON.stringify(c));
+const PLATS = { tiktok:['TikTok','https://www.tiktok.com/tiktokstudio/upload',0],
+  shorts:['Shorts','https://www.youtube.com/upload',30],
+  reels:['Reels','https://www.instagram.com/reels/create/',60] };
+
+function nextSlots(count, plat, existing){   // créneaux sur les jours choisis
+  const cfg = cfgGet(), [hh, mm] = cfg.hour.split(':').map(Number);
+  const off = (PLATS[plat] || PLATS.tiktok)[2];
+  const taken = new Set(existing.filter(p => (p.plat||'tiktok') === plat).map(p => p.plan));
+  const out = [];
+  for (let i = 0; out.length < count && i < 120; i++){
+    const d = new Date(); d.setDate(d.getDate() + i);
+    if (!cfg.days.includes(d.getDay())) continue;
+    d.setHours(hh, mm + off, 0, 0);
+    if (d <= new Date() || taken.has(d.toISOString())) continue;
+    out.push(d);
+  }
+  return out;
 }
 
 function addToPlan(video, variants){
-  const d = dbGet();
-  for (const v of variants){
-    const slot = nextSlot(d.posts.filter(p => !p.posted));
-    d.posts.push({ id: Math.random().toString(16).slice(2) + Date.now(),
+  const d = dbGet(), cfg = cfgGet();
+  for (const plat of cfg.plats){
+    const slots = nextSlots(variants.length, plat, d.posts.filter(p => !p.posted));
+    variants.forEach((v, i) => d.posts.push({
+      id: Math.random().toString(16).slice(2) + Date.now(),
       created: new Date().toISOString(), video, variant: v.name, hyp: v.hypothesis,
-      caption: v.caption, plan: slot.toISOString(), posted: null, stats: null });
+      caption: v.caption, feat: v.feat || null, plat,
+      plan: (slots[i] || new Date()).toISOString(), posted: null, stats: null }));
   }
   dbSet(d); renderLabo();
 }
@@ -510,17 +644,27 @@ function renderLabo(){
   const d = dbGet();
   const plan = d.posts.filter(p => !p.posted)
     .sort((a, b) => new Date(a.plan) - new Date(b.plan));
-  $('#plan').innerHTML = plan.length ? plan.map(p =>
-    `<div class="post"><b>${p.variant}</b> · prévu ${fmtD(p.plan)}<br>
+  let lastDay = '';
+  $('#plan').innerHTML = plan.length ? plan.map(p => {
+    const dt = new Date(p.plan);
+    const day = dt.toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' });
+    const head = day !== lastDay ? `<p style="margin-top:14px">📅 <b>${day}</b></p>` : '';
+    lastDay = day;
+    const pl = PLATS[p.plat || 'tiktok'];
+    return head + `<div class="post"><b>${p.variant}</b> · ${pl[0]} ·
+     ${dt.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}<br>
      <span class="note">💬 ${p.caption}</span><br>
-     <button class="mini" onclick="markPosted('${p.id}')">✓ Je viens de le poster</button>
-     <button class="mini ghost" onclick="delPost('${p.id}')">✕</button></div>`).join('')
-    : '<p class="note">Rien en attente — monte une vidéo, les variantes arrivent ici toutes seules.</p>';
+     <button class="mini ghost" onclick="copyCap('${p.id}')">📋 Caption</button>
+     <a class="mini ghost" href="${pl[1]}" target="_blank">🚀 Ouvrir ${pl[0]}</a>
+     <button class="mini" onclick="markPosted('${p.id}')">✓ Posté</button>
+     <button class="mini ghost" onclick="delPost('${p.id}')">✕</button></div>`;
+  }).join('') : '<p class="note">Rien en attente — monte une vidéo, les variantes arrivent ici toutes seules.</p>';
+  renderDuels();
 
   const pend = d.posts.filter(p => p.posted && !p.stats);
   $('#pending').innerHTML = pend.length ? pend.map(p => {
     const late = Date.now() - new Date(p.posted) > 1728e5;
-    return `<div class="post"><b>${p.variant}</b> · posté ${fmtD(p.posted)}
+    return `<div class="post"><b>${p.variant}</b> · ${(PLATS[p.plat||'tiktok'])[0]} · posté ${fmtD(p.posted)}
       ${late ? '<span style="color:var(--acc2)"> — 48h écoulées, note les stats !</span>' : ''}
       <div class="statrow" id="st_${p.id}">
       <input placeholder="vues" data-f="v"><input placeholder="watch %" data-f="w">
@@ -542,11 +686,81 @@ function renderLabo(){
     ? `Ton hook ${win} domine nettement. Au prochain montage, il sera automatiquement décliné en 2 versions (hook court vs long) pour affiner — c'est le mode duel.`
     : ag.length ? 'Pas encore assez de données pour trancher (≥3 posts par variante). Continue d\'alterner A, B et C.'
     : 'Poste tes 3 premières variantes, note les stats à 48h, et les enseignements apparaîtront ici.';
+  renderDetector();
   [...$('#vars').children].forEach(ch => {
     ch.textContent = ch.textContent.replace('🏆 ', '');
     if (win && ch.dataset.v === win) ch.textContent = '🏆 ' + ch.textContent;
   });
 }
+function renderDetector(){
+  const W = hookWeights(); let learned = null;
+  try { learned = JSON.parse(localStorage.getItem(HWK)); } catch(e){}
+  const labels = { motion:'Mouvement (stimulation)', burst:'Surprise (pic soudain)',
+    novelty:'Nouvelles couleurs', sat:'Saturation', con:'Contraste',
+    reveal:'Aperçu du résultat (curiosity gap)', uniq:'Originalité du moment' };
+  const max = Math.max(...Object.values(W).map(Math.abs), .01);
+  $('#detector').innerHTML = Object.keys(labels).map(k =>
+    `<div class="post">${labels[k]} — poids ${W[k].toFixed(2)}
+     <div class="bar" style="margin-top:6px"><i style="width:${Math.round(100*Math.abs(W[k])/max)}%${W[k]<0?';background:#ff7b7b':''}"></i></div></div>`).join('') +
+    `<p class="note">${learned && learned.n >= 4
+      ? 'Poids appris sur ' + learned.n + ' posts notés — le détecteur se réajuste à chaque nouvelle stat. Un poids rouge = signal qui fait fuir, il sera évité.'
+      : 'Réglages de base issus de la recherche (saillance visuelle, 3-second rule). Dès 4 posts D notés, il apprendra de TES stats.'}</p>`;
+}
+function renderDuels(){
+  const byVid = {};
+  for (const p of dbGet().posts) if (p.stats) (byVid[p.video] = byVid[p.video] || []).push(p);
+  const sc = p => (+p.stats.w||0) + 2*((+p.stats.l||0)+(+p.stats.c||0)+(+p.stats.p||0))
+                  / Math.max(+p.stats.v||1, 1) * 100;
+  const rounds = Object.entries(byVid).filter(([, arr]) => arr.length >= 2);
+  $('#duels').innerHTML = rounds.length ? rounds.map(([vid, arr]) => {
+    const sorted = [...arr].sort((a, b) => sc(b) - sc(a));
+    return `<div class="post"><b>🏁 ${vid}</b><br>` + sorted.map((p, i) =>
+      `${i === 0 ? '🥇' : i === 1 ? '🥈' : '▫️'} ${p.variant} (${(PLATS[p.plat||'tiktok'])[0]})
+       — score ${sc(p).toFixed(0)}`).join('<br>') + `</div>`;
+  }).join('') : '<p class="note">Les duels s’affichent dès que 2 variantes d’une même vidéo ont leurs stats.</p>';
+}
+window.copyCap = id => {
+  const p = dbGet().posts.find(x => x.id === id);
+  if (p) navigator.clipboard.writeText(p.caption).catch(() => {});
+};
+function renderCfg(){
+  const cfg = cfgGet();
+  [...$('#plats').children].forEach(c => c.classList.toggle('on', cfg.plats.includes(c.dataset.p)));
+  [...$('#pdays').children].forEach(c => c.classList.toggle('on', cfg.days.includes(+c.dataset.d)));
+  $('#phour').value = cfg.hour;
+}
+$('#plats').onclick = e => { if (!e.target.dataset.p) return;
+  const cfg = cfgGet(), p = e.target.dataset.p;
+  cfg.plats = cfg.plats.includes(p) ? cfg.plats.filter(x => x !== p) : [...cfg.plats, p];
+  if (!cfg.plats.length) cfg.plats = ['tiktok'];
+  cfgSet(cfg); renderCfg(); };
+$('#pdays').onclick = e => { if (e.target.dataset.d === undefined) return;
+  const cfg = cfgGet(), d = +e.target.dataset.d;
+  cfg.days = cfg.days.includes(d) ? cfg.days.filter(x => x !== d) : [...cfg.days, d].sort();
+  if (!cfg.days.length) cfg.days = [0,1,2,3,4,5,6];
+  cfgSet(cfg); renderCfg(); };
+$('#phour').onchange = e => { const cfg = cfgGet(); cfg.hour = e.target.value || '18:30';
+  cfgSet(cfg); };
+$('#expics').onclick = () => {
+  const pad = n => String(n).padStart(2, '0');
+  const fmt = d => d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + 'T' +
+                   pad(d.getHours()) + pad(d.getMinutes()) + '00';
+  let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//AutoTok//FR\r\n';
+  for (const p of dbGet().posts.filter(p => !p.posted)){
+    const s = new Date(p.plan), e = new Date(s.getTime() + 9e5);
+    ics += 'BEGIN:VEVENT\r\nUID:' + p.id + '@autotok\r\nDTSTART:' + fmt(s) +
+      '\r\nDTEND:' + fmt(e) + '\r\nSUMMARY:Poster ' + p.variant + ' sur ' +
+      (PLATS[p.plat||'tiktok'])[0] + '\r\nDESCRIPTION:' + p.caption.replace(/,/g, '\\,') +
+      '\r\nEND:VEVENT\r\n';
+  }
+  $('#expics').href = URL.createObjectURL(new Blob([ics + 'END:VCALENDAR'],
+    { type: 'text/calendar' }));
+};
+if (localStorage.getItem('autotok_howto')) $('#howto').style.display = 'none';
+$('#hideHow').onclick = () => { localStorage.setItem('autotok_howto', '1');
+  $('#howto').style.display = 'none'; };
+renderCfg();
+
 window.markPosted = id => { const d = dbGet();
   const p = d.posts.find(x => x.id === id); if (p) p.posted = new Date().toISOString();
   dbSet(d); renderLabo(); };
@@ -556,16 +770,16 @@ window.saveStats = id => { const d = dbGet();
   const p = d.posts.find(x => x.id === id); if (!p) return;
   p.stats = {}; document.querySelectorAll('#st_' + id + ' input')
     .forEach(inp => p.stats[inp.dataset.f] = inp.value);
-  dbSet(d); renderLabo(); };
+  dbSet(d); learnHookWeights(); renderLabo(); };
 
 $('#tabM').onclick = () => { $('#tabM').classList.add('on'); $('#tabL').classList.remove('on');
   $('#pageMontage').style.display = 'block'; $('#pageLabo').style.display = 'none'; };
 $('#tabL').onclick = () => { $('#tabL').classList.add('on'); $('#tabM').classList.remove('on');
   $('#pageMontage').style.display = 'none'; $('#pageLabo').style.display = 'block'; renderLabo(); };
 $('#expcsv').onclick = () => {
-  let csv = 'video,variante,hypothese,prevu,poste,vues,watch_pct,likes,commentaires,partages,follows\n';
+  let csv = 'video,variante,plateforme,hypothese,prevu,poste,vues,watch_pct,likes,commentaires,partages,follows\n';
   for (const p of dbGet().posts){ const s = p.stats || {};
-    csv += [p.video, p.variant, '"' + p.hyp.replace(/"/g, "'") + '"', p.plan, p.posted || '',
+    csv += [p.video, p.variant, p.plat || 'tiktok', '"' + p.hyp.replace(/"/g, "'") + '"', p.plan, p.posted || '',
       s.v || '', s.w || '', s.l || '', s.c || '', s.p || '', s.f || ''].join(',') + '\n'; }
   $('#expcsv').href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
 };
@@ -590,6 +804,10 @@ $('#go').onclick = async () => {
     const win = winnerLetter();
     if ((win === 'A' || win === 'B') && wanted.includes(win))
       variants = variants.flatMap(v => v.name[0] === win ? makeDuel(v) : [v]);
+    if (wanted.includes('D')){
+      const hd = detectHook(samples, segs, target);
+      if (hd) variants.push(hd);
+    }
     const ext = pickMime().startsWith('video/mp4') ? 'mp4' : 'webm';
     let i = 0;
     for (const v of variants){
